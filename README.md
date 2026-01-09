@@ -10,7 +10,7 @@ A smart watch project based on ESP32 with Max72xxPanel LED display that shows ti
 - **Time and Date Display**: Real-time clock with NTP synchronization
 - **Weather Information**: Current weather, temperature, humidity, pressure from OpenWeatherMap API
 - **Currency Rates**: USD and EUR exchange rates
-- **Environmental Sensors**: Support for DHT22 temperature and humidity sensor
+- **Environmental Sensors**: Support for DHT11/DHT22 temperature and humidity sensor
 - **Geolocation Services**: Automatic location detection via Google Geolocation API
 - **Multi-language Support**: Interface in Russian and English
 - **Energy Efficiency**: WiFi power management and automatic brightness adjustment
@@ -24,8 +24,8 @@ A smart watch project based on ESP32 with Max72xxPanel LED display that shows ti
 ## Hardware Requirements
 
 - ESP32 or ESP32-C3 microcontroller
-- Max72xxPanel LED matrix display (4 modules)
-- DHT22 temperature/humidity sensor (optional)
+- Max72xxPanel LED matrix display (4 modules, configurable via `MAX_DEVICES` in `led_display.h`)
+- DHT11/DHT22 temperature/humidity sensor (optional, configurable in `dht22_manager.h`)
 - WiFi connection
 
 **Note**: The project automatically detects single-core (ESP32-C3) and dual-core (ESP32) configurations and adjusts task scheduling accordingly.
@@ -39,12 +39,16 @@ A smart watch project based on ESP32 with Max72xxPanel LED display that shows ti
 - **DHTPIN**: 12 (GPIO12) - DHT22 sensor
 
 ### ESP32-C3 (GOOUUU Board)
-- **CLK_PIN**: 18 (GPIO18)
-- **DATA_PIN**: 23 (GPIO23)
-- **CS_PIN**: 5 (GPIO5)
-- **DHTPIN**: 2 (GPIO2) - DHT22 sensor
+- **CLK_PIN**: 6 (GPIO6) - SPI CLK
+- **DATA_PIN**: 7 (GPIO7) - SPI MOSI
+- **CS_PIN**: 5 (GPIO5) - SPI CS
+- **DHTPIN**: 2 (GPIO2) - DHT sensor
 
-**Note**: Pins can be changed in `led_display.h` and `dht22_manager.h` according to your ESP32 board. The project includes specific configurations for ESP32-C3 boards.
+**Note**: 
+- Pins can be changed in `led_display.h` and `dht22_manager.h` according to your ESP32 board
+- The project includes specific configurations for ESP32-C3 boards (GOOUUU board)
+- LED matrix hardware type is set to `FC16_HW` by default (configurable in `led_display.h`)
+- Number of LED modules can be changed via `MAX_DEVICES` in `led_display.h` (default: 4)
 
 ## Prerequisites
 
@@ -61,7 +65,7 @@ A smart watch project based on ESP32 with Max72xxPanel LED display that shows ti
 - `MD_MAX72XX` (for LED matrix display)
 - `MD_Parola` (for text scrolling on display)
 - `TimeLib` (for time management)
-- `DHT sensor library` (for DHT22 sensor)
+- `DHT sensor library` (for DHT11/DHT22 sensor)
 - `Ticker` (for periodic tasks)
 - `WiFiManager` (for WiFi setup)
 - `NTPClient` (for time synchronization)
@@ -175,8 +179,10 @@ The device cyclically displays the following information every 5 seconds:
 8. Weather description
 9. USD exchange rate
 10. EUR exchange rate
-11. Home temperature (DHT22)
-12. Home humidity (DHT22)
+11. Home temperature (DHT sensor)
+12. Home humidity (DHT sensor)
+
+**Note**: Weather and currency data are updated every 15 minutes (configurable in `constants.h` as `Timing::DATA_UPDATE_INTERVAL_SEC`).
 
 ## Configuration
 
@@ -269,9 +275,11 @@ Main changes for ESP32:
 - Ensure correct CS pin selection
 
 ### Sensor Issues
-- Check DHT22 connection
-- Check sensor power supply
+- Check DHT11/DHT22 connection
+- Verify sensor type matches configuration in `dht22_manager.h` (`DHTTYPE`)
+- Check sensor power supply (3.3V or 5V depending on sensor)
 - Ensure sensor is not damaged
+- For ESP32-C3, use GPIO2 (safer than GPIO12)
 
 ### API Issues
 - Check API key correctness
