@@ -27,4 +27,3 @@ private:
 };
 
 #endif // WEATHER_MANAGER_H
-

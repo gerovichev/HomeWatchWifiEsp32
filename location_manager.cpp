@@ -4,7 +4,7 @@
 #include "secure_client.h"
 #include <ArduinoJson.h>
 #include <HTTPClient.h>
-#include <SPIFFS.h>
+#include <LittleFS.h>
 #include <WiFiClientSecure.h>
 #include <WifiLocation.h>
 
@@ -20,36 +20,14 @@ const char *filenamecnf = "/config.txt";
 
 // Loads the configuration from a file
 void loadConfiguration() {
-  // Try to mount SPIFFS
-  if (!SPIFFS.begin(false)) {
-    // If mount fails, try to format and mount again
-    LOG_WARNING_F("SPIFFS mount failed, attempting to format...");
-    if (!SPIFFS.format()) {
-      LOG_ERROR_F("SPIFFS format failed, using defaults");
-      return;
-    }
-    // Try to mount again after formatting
-    if (!SPIFFS.begin(true)) {
-      LOG_ERROR_F("SPIFFS mount failed after format, using defaults");
-      return;
-    }
-    LOG_INFO_F("SPIFFS formatted and mounted successfully");
-  }
-  
-  // Log SPIFFS info - optimized to avoid String concatenation
-  size_t totalBytes = SPIFFS.totalBytes();
-  size_t usedBytes = SPIFFS.usedBytes();
-  if (Serial) {
-    Serial.print(F("[INFO]   "));
-    Serial.print(F(" "));
-    Serial.print(F("SPIFFS: "));
-    Serial.print(usedBytes);
-    Serial.print(F(" / "));
-    Serial.print(totalBytes);
-    Serial.println(F(" bytes used"));
+  bool mounted = LittleFS.begin(true);
+  LOG_DEBUG("LittleFS opened with result: " + String(mounted ? 1 : 0));
+  if (!mounted) {
+    LOG_ERROR_F("Failed to mount LittleFS (format attempted)");
+    return;
   }
 
-  File file = SPIFFS.open(filenamecnf, "r");
+  File file = LittleFS.open(filenamecnf, "r");
   if (file) {
     StaticJsonDocument<Buffer::JSON_LOCATION_SIZE>
         doc; // Location config is small: lat, lon, ip
@@ -58,21 +36,11 @@ void loadConfiguration() {
     if (error) {
       LOG_WARNING_F("Failed to read location config file, using defaults");
     } else {
-      config.latitude = doc["latitude"] | 0.0f;
-      config.longitude = doc["longitude"] | 0.0f;
-      const char* ipStr = doc["ip"] | "";
-      config.ip = String(ipStr);
-      // Optimized logging - avoid String concatenation
-      if (Serial) {
-        Serial.print(F("[INFO]   "));
-        Serial.print(F(" "));
-        Serial.print(F("Loaded location config: lat="));
-        Serial.print(config.latitude, 6);
-        Serial.print(F(", lon="));
-        Serial.print(config.longitude, 6);
-        Serial.print(F(", ip="));
-        Serial.println(config.ip);
-      }
+      config.latitude = doc["latitude"];
+      config.longitude = doc["longitude"];
+      config.ip = String(doc["ip"]);
+      LOG_INFO("Loaded location config: lat=" + String(config.latitude, 6) +
+               ", lon=" + String(config.longitude, 6) + ", ip=" + config.ip);
     }
 
     file.close();
@@ -80,31 +48,21 @@ void loadConfiguration() {
     LOG_WARNING_F("Location config file not found");
   }
 
-  SPIFFS.end();
+  LittleFS.end();
 }
 
 // Saves the configuration to a file
 void saveConfiguration() {
-  // Try to mount SPIFFS
-  if (!SPIFFS.begin(false)) {
-    // If mount fails, try to format and mount again
-    LOG_WARNING_F("SPIFFS mount failed, attempting to format...");
-    if (!SPIFFS.format()) {
-      LOG_ERROR_F("SPIFFS format failed, cannot save config");
-      return;
-    }
-    // Try to mount again after formatting
-    if (!SPIFFS.begin(true)) {
-      LOG_ERROR_F("SPIFFS mount failed after format, cannot save config");
-      return;
-    }
-    LOG_INFO_F("SPIFFS formatted and mounted successfully");
+  bool mounted = LittleFS.begin(true);
+  LOG_DEBUG("LittleFS opened for writing: " + String(mounted ? 1 : 0));
+  if (!mounted) {
+    LOG_ERROR_F("Failed to mount LittleFS for writing (format attempted)");
+    return;
   }
 
-  File file = SPIFFS.open(filenamecnf, "w");
+  File file = LittleFS.open(filenamecnf, "w");
   if (!file) {
     LOG_ERROR_F("Failed to create location config file");
-    SPIFFS.end();
     return;
   }
 
@@ -112,26 +70,17 @@ void saveConfiguration() {
       doc; // Location config is small: lat, lon, ip
   doc["latitude"] = config.latitude;
   doc["longitude"] = config.longitude;
-  doc["ip"] = config.ip.c_str();
+  doc["ip"] = config.ip;
 
   if (serializeJson(doc, file) == 0) {
     LOG_ERROR_F("Failed to write location config to file");
   } else {
-    // Optimized logging - avoid String concatenation
-    if (Serial) {
-      Serial.print(F("[INFO]   "));
-      Serial.print(F(" "));
-      Serial.print(F("Location config saved: lat="));
-      Serial.print(config.latitude, 6);
-      Serial.print(F(", lon="));
-      Serial.print(config.longitude, 6);
-      Serial.print(F(", ip="));
-      Serial.println(config.ip);
-    }
+    LOG_INFO("Location config saved: lat=" + String(config.latitude, 6) +
+             ", lon=" + String(config.longitude, 6) + ", ip=" + config.ip);
   }
 
   file.close();
-  SPIFFS.end();
+  LittleFS.end();
 }
 
 // Sets time via NTP for x.509 validation
@@ -156,13 +105,7 @@ void setClock() {
 
   struct tm timeinfo;
   gmtime_r(&now, &timeinfo);
-  // Optimized logging - avoid String concatenation
-  if (Serial) {
-    Serial.print(F("[DEBUG]  "));
-    Serial.print(F(" "));
-    Serial.print(F("System clock set: "));
-    Serial.println(asctime(&timeinfo));
-  }
+  LOG_DEBUG("System clock set: " + String(asctime(&timeinfo)));
 }
 
 // Get location via Google API using WiFi data
@@ -175,38 +118,18 @@ void getLocationAPI(String ip) {
   location_t loc = location.getGeoFromWiFi();
 
   if (!location.wlStatusStr(location.getStatus()).equals("OK")) {
-    // Optimized logging - avoid String concatenation
-    if (Serial) {
-      Serial.print(F("[ERROR]  "));
-      Serial.print(F(" "));
-      Serial.print(F("Google Geolocation API returned status: "));
-      Serial.println(location.wlStatusStr(location.getStatus()));
-    }
+    LOG_ERROR("Google Geolocation API returned status: " +
+              location.wlStatusStr(location.getStatus()));
     return;
   }
 
   latitude = loc.lat;
   longitude = loc.lon;
 
-  // Optimized logging - avoid String concatenation
-  if (Serial) {
-    Serial.print(F("[INFO]   "));
-    Serial.print(F(" "));
-    Serial.print(F("Location updated: lat="));
-    Serial.print(latitude, 7);
-    Serial.print(F(", lon="));
-    Serial.println(longitude, 7);
-  }
-  // Optimized logging - avoid String concatenation
-  if (Serial) {
-    Serial.print(F("[DEBUG]  "));
-    Serial.print(F(" "));
-    Serial.print(F("Location accuracy: "));
-    Serial.print(loc.accuracy);
-    Serial.println(F(" meters"));
-  }
-  // Note: getSurroundingWiFiJson() returns String - disabled to save code size
-  // LOG_VERBOSE("WiFi scan data: " + location.getSurroundingWiFiJson());
+  LOG_INFO("Location updated: lat=" + String(latitude, 7) +
+           ", lon=" + String(longitude, 7));
+  LOG_DEBUG("Location accuracy: " + String(loc.accuracy) + " meters");
+  LOG_VERBOSE("WiFi scan data: " + location.getSurroundingWiFiJson());
 
   config.latitude = latitude;
   config.longitude = longitude;
@@ -228,30 +151,17 @@ String getIp() {
 
   while (attempts < maxAttemptsLoc && !success) {
     if (http.begin(client, path)) {
-      // Optimized logging - avoid String concatenation
-      if (Serial) {
-        Serial.print(F("[DEBUG]  "));
-        Serial.print(F(" "));
-        Serial.print(F("IP retrieval attempt "));
-        Serial.print(attempts + 1);
-        Serial.print(F("/"));
-        Serial.println(maxAttemptsLoc);
-      }
+      LOG_DEBUG("IP retrieval attempt " + String(attempts + 1) + "/" +
+                String(maxAttemptsLoc));
       int httpCode = http.GET(); // Send the request
 
       if (httpCode == HTTP_CODE_OK) {
         payload = http.getString(); // Get the response payload
-        // Optimized logging - avoid String concatenation
-        if (Serial) {
-          Serial.print(F("[INFO]   "));
-          Serial.print(F(" "));
-          Serial.print(F("External IP retrieved: "));
-          Serial.println(payload);
-        }
+        LOG_INFO("External IP retrieved: " + payload);
         success = true;
         maxAttemptsLoc = 1;
       } else {
-        LOG_WARNING_VAR("IP retrieval HTTP error: ", httpCode);
+        LOG_WARNING("IP retrieval HTTP error: " + String(httpCode));
       }
 
       http.end();
@@ -262,26 +172,12 @@ String getIp() {
     if (!success) {
       attempts++;
       if (attempts < maxAttemptsLoc) {
-        // Optimized logging - avoid String concatenation
-        if (Serial) {
-          Serial.print(F("[WARN]   "));
-          Serial.print(F(" "));
-          Serial.print(F("Retrying IP retrieval ("));
-          Serial.print(attempts);
-          Serial.print(F("/"));
-          Serial.print(maxAttemptsLoc);
-          Serial.println(F(")..."));
-        }
+        LOG_WARNING("Retrying IP retrieval (" + String(attempts) + "/" +
+                    String(maxAttemptsLoc) + ")...");
         delay(Timing::RETRY_DELAY_MS);
       } else {
-        // Optimized logging - avoid String concatenation
-        if (Serial) {
-          Serial.print(F("[ERROR]  "));
-          Serial.print(F(" "));
-          Serial.print(F("Failed to get IP after "));
-          Serial.print(maxAttemptsLoc);
-          Serial.println(F(" attempts."));
-        }
+        LOG_ERROR("Failed to get IP after " + String(maxAttemptsLoc) +
+                  " attempts.");
         // Don't restart immediately - allow device to continue with cached
         // location if available Only restart if this is critical for device
         // operation
@@ -309,19 +205,11 @@ void location_init() {
   if (ip.equals(config.ip) && config.latitude != 0) {
     latitude = config.latitude;
     longitude = config.longitude;
-    // Optimized logging - avoid String concatenation
-    if (Serial) {
-      Serial.print(F("[INFO]   "));
-      Serial.print(F(" "));
-      Serial.print(F("Using cached location: lat="));
-      Serial.print(latitude, 7);
-      Serial.print(F(", lon="));
-      Serial.println(longitude, 7);
-    }
+    LOG_INFO("Using cached location: lat=" + String(latitude, 7) +
+             ", lon=" + String(longitude, 7));
   } else {
     LOG_INFO_F("IP changed or no cached location, fetching new location...");
     getLocationAPI(ip);
     saveConfiguration();
   }
 }
-

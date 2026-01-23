@@ -22,74 +22,70 @@ LogLevel Logger::getLogLevel() const {
     return logLevel;
 }
 
-// Simplified String methods - minimal implementation
-void Logger::error(const String& message) {
-    if (!isInitialized || !Serial || LOG_LEVEL_ERROR > logLevel) return;
-    Serial.print(F("[ERROR]  "));
-    Serial.print(F(" "));
+const char* Logger::getLevelString(LogLevel level) {
+    switch (level) {
+        case LOG_LEVEL_ERROR:   return "[ERROR]  ";
+        case LOG_LEVEL_WARNING: return "[WARN]   ";
+        case LOG_LEVEL_INFO:    return "[INFO]   ";
+        case LOG_LEVEL_DEBUG:   return "[DEBUG]  ";
+        case LOG_LEVEL_VERBOSE: return "[VERBOSE]";
+        default:                return "[UNKNOWN]";
+    }
+}
+
+void Logger::log(LogLevel level, const String& message) {
+    if (!isInitialized || !Serial || level > logLevel) {
+        return;
+    }
+    
+    // Print timestamp (milliseconds since start)
+    unsigned long timestamp = millis();
+    char timeStr[12];
+    sprintf(timeStr, "%10lu", timestamp);
+    
+    Serial.print(timeStr);
+    Serial.print(" ");
+    Serial.print(getLevelString(level));
+    Serial.print(" ");
     Serial.println(message);
+}
+
+void Logger::error(const String& message) {
+    log(LOG_LEVEL_ERROR, message);
 }
 
 void Logger::warning(const String& message) {
-    if (!isInitialized || !Serial || LOG_LEVEL_WARNING > logLevel) return;
-    Serial.print(F("[WARN]   "));
-    Serial.print(F(" "));
-    Serial.println(message);
+    log(LOG_LEVEL_WARNING, message);
 }
 
 void Logger::info(const String& message) {
-    if (!isInitialized || !Serial || LOG_LEVEL_INFO > logLevel) return;
-    Serial.print(F("[INFO]   "));
-    Serial.print(F(" "));
-    Serial.println(message);
+    log(LOG_LEVEL_INFO, message);
 }
 
-// Optimized Flash string handlers - print directly without String conversion
+void Logger::debug(const String& message) {
+    log(LOG_LEVEL_DEBUG, message);
+}
+
+void Logger::verbose(const String& message) {
+    log(LOG_LEVEL_VERBOSE, message);
+}
+
 void Logger::error(const __FlashStringHelper* message) {
-    if (!isInitialized || !Serial || LOG_LEVEL_ERROR > logLevel) {
-        return;
-    }
-    Serial.print(F("[ERROR]  "));
-    Serial.print(F(" "));
-    Serial.println(message);
+    error(String(message));
 }
 
 void Logger::warning(const __FlashStringHelper* message) {
-    if (!isInitialized || !Serial || LOG_LEVEL_WARNING > logLevel) {
-        return;
-    }
-    Serial.print(F("[WARN]   "));
-    Serial.print(F(" "));
-    Serial.println(message);
+    warning(String(message));
 }
 
 void Logger::info(const __FlashStringHelper* message) {
-    if (!isInitialized || !Serial || LOG_LEVEL_INFO > logLevel) {
-        return;
-    }
-    Serial.print(F("[INFO]   "));
-    Serial.print(F(" "));
-    Serial.println(message);
+    info(String(message));
 }
 
-#ifndef DISABLE_DEBUG_LOGGING
 void Logger::debug(const __FlashStringHelper* message) {
-    if (!isInitialized || !Serial || LOG_LEVEL_DEBUG > logLevel) {
-        return;
-    }
-    Serial.print(F("[DEBUG]  "));
-    Serial.print(F(" "));
-    Serial.println(message);
+    debug(String(message));
 }
-#endif
 
-#ifndef DISABLE_VERBOSE_LOGGING
 void Logger::verbose(const __FlashStringHelper* message) {
-    if (!isInitialized || !Serial || LOG_LEVEL_VERBOSE > logLevel) {
-        return;
-    }
-    Serial.print(F("[VERBOSE]"));
-    Serial.print(F(" "));
-    Serial.println(message);
+    verbose(String(message));
 }
-#endif

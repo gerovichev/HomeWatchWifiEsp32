@@ -12,7 +12,6 @@
 #include <Ticker.h>
 #include "MQTTClient.h"
 #include "constants.h"
-#include "multicore_tasks.h"  // For dataUpdateRequested flag
 
 // TIME_TO_CALL_SERVICES moved to constants.h as Timing::DATA_UPDATE_INTERVAL_SEC
 
@@ -27,5 +26,3 @@ void fetchWeatherAndCurrency();
 void loop();
 void enableWiFi();
 void disableWiFi();
-void initMulticoreTasks(); // Initialize multicore tasks
-

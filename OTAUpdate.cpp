@@ -2,7 +2,6 @@
 #include "constants.h"
 #include "logger.h"
 #include "secure_client.h"
-#include "location_manager.h"
 
 // Global variable definition
 String pathOta;
@@ -10,32 +9,32 @@ String pathOta;
 // OTA callbacks
 void update_started() {
   LOG_INFO_F("OTA update process started");
-  printText("Update");
+  printText(F("Update"));
 }
 
 void update_finished() {
   LOG_INFO_F("OTA update process finished");
-  printText("Restart");
+  printText(F("Restart"));
 }
 
 void update_progress(int cur, int total) {
-  int percent = cur / (total / 100);
+  int percent = 0;
+  if (total > 0) {
+    percent = (cur * 100) / total;
+  }
   printText(String(percent, DEC) + " %");
-  // LOG_VERBOSE("OTA progress: " + String(cur) + "/" + String(total) +
-  //             " bytes (" + String(percent) + "%)"); // Disabled to save code size
+  if (total > 0) {
+    LOG_VERBOSE("OTA progress: " + String(cur) + "/" + String(total) +
+                " bytes (" + String(percent) + "%)");
+  } else {
+    LOG_VERBOSE("OTA progress: " + String(cur) + "/unknown bytes (" +
+                String(percent) + "%)");
+  }
 }
 
 void update_error(int err) {
-  // Optimized logging - avoid String concatenation
-  if (Serial) {
-    Serial.print(F("[ERROR]  "));
-    Serial.print(F(" "));
-    Serial.print(F("OTA update fatal error code: "));
-    Serial.print(err);
-    Serial.print(F(" ("));
-    Serial.print(httpUpdate.getLastErrorString());
-    Serial.println(F(")"));
-  }
+  LOG_ERROR("OTA update fatal error code: " + String(err) + " (" +
+            httpUpdate.getLastErrorString() + ")");
 }
 
 // OTA initialization
@@ -44,15 +43,15 @@ void web_ota_init() {
   httpUpdate.onEnd(update_finished);
   httpUpdate.onProgress(update_progress);
   httpUpdate.onError(update_error);
-  // Note: ESP32 HTTPUpdate doesn't have setTimeout method
-  // Timeout is handled by the WiFiClientSecure client
+  // Note: ESP32 HTTPUpdate doesn't have setClientTimeout
+  httpUpdate.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
 
   // Constructing OTA URL - optimize to reduce String allocations
   pathOta.reserve(strlen(webOTA_updateURL) + macAddrSt.length() +
                   hostname_m.length() + ip.length() + version_prg.length() +
                   50);
-  pathOta = String(webOTA_updateURL) + String("?MAC=") + macAddrSt + String("&hst=") +
-            hostname_m + String("&ip=") + ip + String("&ver=") + version_prg;
+  pathOta = String(webOTA_updateURL) + F("?MAC=") + macAddrSt + F("&hst=") +
+            hostname_m + F("&ip=") + ip + F("&ver=") + version_prg;
 }
 
 // Perform OTA update
@@ -61,25 +60,21 @@ void update_ota() {
   setupSecureClient(client, "OTA server");
   client.setTimeout(Timing::OTA_CLIENT_TIMEOUT_MS);
 
-  // LOG_DEBUG("OTA URL: " + pathOta); // Disabled to save code size
+  LOG_DEBUG("OTA URL: " + pathOta);
+  LOG_DEBUG("OTA client timeout: " + String(Timing::OTA_CLIENT_TIMEOUT_MS) +
+            " ms");
 
   // Perform the update and check the result
   t_httpUpdate_return ret = httpUpdate.update(client, pathOta, version_prg);
 
-  // LOG_DEBUG("OTA returned code: " + String(ret)); // Disabled to save code size
+  LOG_DEBUG("OTA returned code: " + String(ret));
 
   // Handle update result
   switch (ret) {
   case HTTP_UPDATE_FAILED:
-    // Optimized logging - avoid String concatenation
-    if (Serial) {
-      Serial.print(F("[ERROR]  "));
-      Serial.print(F(" "));
-      Serial.print(F("OTA update failed: Error "));
-      Serial.print(httpUpdate.getLastError());
-      Serial.print(F(" - "));
-      Serial.println(httpUpdate.getLastErrorString());
-    }
+    LOG_ERROR("OTA update failed: Error " +
+              String(httpUpdate.getLastError()) + " - " +
+              httpUpdate.getLastErrorString());
     break;
 
   case HTTP_UPDATE_NO_UPDATES:
@@ -91,4 +86,3 @@ void update_ota() {
     break;
   }
 }
-

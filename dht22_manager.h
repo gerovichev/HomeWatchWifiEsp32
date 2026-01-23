@@ -4,8 +4,8 @@
 #include "global_config.h"
 
 // Pin and sensor type definitions
-#define DHTPIN 2       // Pin which is connected to the DHT sensor (GPIO2 for ESP32-C3)
-#define DHTTYPE DHT11  // DHT 22 (AM2302)
+#define DHTPIN 12      // Pin which is connected to the DHT sensor.
+#define DHTTYPE DHT22  // DHT 22 (AM2302)
 
 
 class Dht22_manager : public DHT_Unified
@@ -33,4 +33,3 @@ private:
   void handleTemperatureError();
   void handleHumidityError();
 };
-

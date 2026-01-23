@@ -45,4 +45,3 @@ extern std::map<String, DeviceConfig> configMap;
 void setDeviceConfig();
 
 #endif // SECRET_H
-

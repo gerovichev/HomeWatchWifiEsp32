@@ -1,9 +1,7 @@
-// CurrencyManager.cpp
 #include "currency_manager.h"
 #include "constants.h"
 #include "logger.h"
 #include "secure_client.h"
-// #include "board_led.h"  // Disabled - board LED not used
 #include <WiFi.h>
 
 CurrencyManager::CurrencyManager()
@@ -16,123 +14,42 @@ CurrencyManager::CurrencyManager()
 }
 
 void CurrencyManager::initialize() {
-  LOG_INFO_F("Initializing currency data...");
-  
   if (float tmpDataUSD = readCurrency(pathCurrencyUSD); tmpDataUSD > 0) {
     dataUSDValue = tmpDataUSD;
-    // Optimized logging - avoid String concatenation
-    if (Serial) {
-      Serial.print(F("[INFO]   "));
-      Serial.print(F(" "));
-      Serial.print(F("USD rate: "));
-      Serial.println(dataUSDValue, 2);
-    }
-  } else {
-    LOG_WARNING_F("Failed to get USD rate");
   }
 
   yield(); // Allow system tasks
 
   if (float tmpDataEUR = readCurrency(pathCurrencyEUR); tmpDataEUR > 0) {
     dataEURValue = tmpDataEUR;
-    // Optimized logging - avoid String concatenation
-    if (Serial) {
-      Serial.print(F("[INFO]   "));
-      Serial.print(F(" "));
-      Serial.print(F("EUR rate: "));
-      Serial.println(dataEURValue, 2);
-    }
-  } else {
-    LOG_WARNING_F("Failed to get EUR rate");
   }
 
   yield();
 
   if (float tmpDataBTC = readCrypto(pathCryptoBTC); tmpDataBTC > 0) {
     dataBTCValue = tmpDataBTC;
-    // Optimized logging - avoid String concatenation
-    if (Serial) {
-      Serial.print(F("[INFO]   "));
-      Serial.print(F(" "));
-      Serial.print(F("BTC rate: "));
-      Serial.println(dataBTCValue, 2);
-    }
-  } else {
-    LOG_WARNING_F("Failed to get BTC rate");
   }
-  
-  LOG_INFO_F("Currency initialization completed");
 }
 
 void CurrencyManager::displayUSDToScreen() {
   if (dataUSDValue > 0) {
-    String displayText = String("$ ") + String(dataUSDValue, 2);
-    // Optimized logging - avoid String concatenation
-    if (Serial) {
-      Serial.print(F("[INFO]   "));
-      Serial.print(F(" "));
-      Serial.print(F(">> Display: USD = "));
-      Serial.println(displayText);
-    }
-    // changeLEDColorForDisplay(DISPLAY_USD);  // Disabled - board LED not used
-    drawString(displayText);
-  } else {
-    // Optimized logging - avoid String concatenation
-    if (Serial) {
-      Serial.print(F("[WARN]   "));
-      Serial.print(F(" "));
-      Serial.print(F(">> Display: USD - data not available (value="));
-      Serial.print(dataUSDValue, 2);
-      Serial.println(F(")"));
-    }
+    drawString(String("$ ") + String(dataUSDValue, 2));
   }
 }
 
 void CurrencyManager::displayEURToScreen() {
   if (dataEURValue > 0) {
-    String displayText = String("\x84 ") + String(dataEURValue, 2);
-    // Optimized logging - avoid String concatenation
-    if (Serial) {
-      Serial.print(F("[INFO]   "));
-      Serial.print(F(" "));
-      Serial.print(F(">> Display: EUR = "));
-      Serial.println(displayText);
-    }
-    // changeLEDColorForDisplay(DISPLAY_EUR);  // Disabled - board LED not used
-    drawString(displayText);
-  } else {
-    // Optimized logging - avoid String concatenation
-    if (Serial) {
-      Serial.print(F("[WARN]   "));
-      Serial.print(F(" "));
-      Serial.print(F(">> Display: EUR - data not available (value="));
-      Serial.print(dataEURValue, 2);
-      Serial.println(F(")"));
-    }
+    drawString(String("\x84 ") + String(dataEURValue, 2));
   }
 }
 
 void CurrencyManager::displayBTCToScreen() {
   if (dataBTCValue > 0) {
-    String displayText = String("B$ ") + String(dataBTCValue, 0);
-    // Optimized logging - avoid String concatenation
-    if (Serial) {
-      Serial.print(F("[INFO]   "));
-      Serial.print(F(" "));
-      Serial.print(F(">> Display: BTC = "));
-      Serial.println(displayText);
-    }
-    // changeLEDColorForDisplay(DISPLAY_BTC);  // Disabled - board LED not used
-    drawString(displayText); // \x80 is often a bitcoin symbol in custom fonts or just 'B'
-  } else {
-    // Optimized logging - avoid String concatenation
-    if (Serial) {
-      Serial.print(F("[WARN]   "));
-      Serial.print(F(" "));
-      Serial.print(F(">> Display: BTC - data not available (value="));
-      Serial.print(dataBTCValue, 2);
-      Serial.println(F(")"));
-    }
+    drawString(
+        String("B$ ") +
+        String(
+            dataBTCValue,
+            0)); // \x80 is often a bitcoin symbol in custom fonts or just 'B'
   }
 }
 
@@ -151,13 +68,13 @@ bool CurrencyManager::setupHttpClient(HTTPClient &http,
 
   String authHeader = String("Bearer ") + String(token);
   LOG_DEBUG("Currency API Bearer: " + String(authHeader));
-  http.addHeader("Authorization", authHeader);
-  http.addHeader("Content-Type", "application/json");
+  http.addHeader(F("Authorization"), authHeader);
+  http.addHeader(F("Content-Type"), F("application/json"));
   return true;
 }
 
 float CurrencyManager::handleHttpResponse(HTTPClient &http) {
-    // Removed verbose logging
+    LOG_VERBOSE("Calling http.GET()...");
     unsigned long startTime = millis();
     int httpCode = http.GET();
     unsigned long elapsed = millis() - startTime;
@@ -188,7 +105,7 @@ float CurrencyManager::handleHttpResponse(HTTPClient &http) {
     }
 
   String payload = http.getString();
-  // Removed verbose logging
+  LOG_VERBOSE("Currency API payload length: " + String(payload.length()));
 
   StaticJsonDocument<Buffer::JSON_CURRENCY_SIZE> doc;
   DeserializationError error = deserializeJson(doc, payload);
@@ -201,7 +118,7 @@ float CurrencyManager::handleHttpResponse(HTTPClient &http) {
 }
 
 float CurrencyManager::handleCryptoResponse(HTTPClient &http) {
-    // Removed verbose logging
+    LOG_VERBOSE("Calling http.GET()...");
     unsigned long startTime = millis();
     int httpCode = http.GET();
     unsigned long elapsed = millis() - startTime;
@@ -232,7 +149,7 @@ float CurrencyManager::handleCryptoResponse(HTTPClient &http) {
     }
 
   String payload = http.getString();
-  // Removed verbose logging
+  LOG_VERBOSE("Crypto API payload length: " + String(payload.length()));
 
   StaticJsonDocument<Buffer::JSON_CURRENCY_SIZE> doc;
   DeserializationError error = deserializeJson(doc, payload);
@@ -296,10 +213,16 @@ float CurrencyManager::readCurrency(const char *path) {
         
         if (connectionStarted) {
             String authHeader = String("Bearer ") + String(bearerTokenCurrency);
-            http.addHeader("Authorization", authHeader);
-            http.addHeader("Content-Type", "application/json");
+            http.addHeader(F("Authorization"), authHeader);
+            http.addHeader(F("Content-Type"), F("application/json"));
             
-            // Removed verbose logging to reduce code size
+            // Log partial token for debugging (first 20 chars)
+            String tokenPreview = String(bearerTokenCurrency);
+            if (tokenPreview.length() > 20) {
+                tokenPreview = tokenPreview.substring(0, 20) + "...";
+            }
+            LOG_VERBOSE("Authorization header: Bearer " + tokenPreview);
+            LOG_DEBUG("HTTP connection started, sending GET request...");
             yield(); // Allow system tasks before sending request
             
             currencyValue = handleHttpResponse(http);
@@ -310,7 +233,7 @@ float CurrencyManager::readCurrency(const char *path) {
             
             if (currencyValue > 0.0) {
                 success = true;
-                LOG_INFO("Currency data retrieved successfully: " + String(currencyValue, 2));
+                LOG_DEBUG("Currency data retrieved successfully: " + String(currencyValue, 2));
             } else {
                 LOG_WARNING("Failed to retrieve currency data (attempt " + String(attempts + 1) + "/" + String(maxAttempts) + ")");
             }
@@ -378,10 +301,16 @@ float CurrencyManager::readCrypto(const char *path) {
         
         if (connectionStarted) {
             String authHeader = String("Bearer ") + String(bearerTokenCrypto);
-            http.addHeader("Authorization", authHeader);
-            http.addHeader("Content-Type", "application/json");
+            http.addHeader(F("Authorization"), authHeader);
+            http.addHeader(F("Content-Type"), F("application/json"));
             
-            // Removed verbose logging to reduce code size
+            // Log partial token for debugging (first 20 chars)
+            String tokenPreview = String(bearerTokenCrypto);
+            if (tokenPreview.length() > 20) {
+                tokenPreview = tokenPreview.substring(0, 20) + "...";
+            }
+            LOG_VERBOSE("Authorization header: Bearer " + tokenPreview);
+            LOG_DEBUG("HTTP connection started, sending GET request...");
             yield(); // Allow system tasks before sending request
             
             cryptoValue = handleCryptoResponse(http);
@@ -392,7 +321,7 @@ float CurrencyManager::readCrypto(const char *path) {
             
             if (cryptoValue > 0.0) {
                 success = true;
-                LOG_INFO("Crypto data retrieved successfully: " + String(cryptoValue, 2));
+                LOG_DEBUG("Crypto data retrieved successfully: " + String(cryptoValue, 2));
             } else {
                 LOG_WARNING("Failed to retrieve crypto data (attempt " + String(attempts + 1) + "/" + String(maxAttempts) + ")");
             }
@@ -417,4 +346,3 @@ float CurrencyManager::readCrypto(const char *path) {
 
     return cryptoValue;
 }
-

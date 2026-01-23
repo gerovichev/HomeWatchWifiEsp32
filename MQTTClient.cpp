@@ -1,5 +1,3 @@
-// File: MQTTClient.cpp
-
 #include "MQTTClient.h"
 #include "dht22_manager.h"
 #include "clock.h"
@@ -57,4 +55,3 @@ void publish_temperature() {
     LOG_WARNING_F("Failed to publish temperature to MQTT");
   }
 }
-

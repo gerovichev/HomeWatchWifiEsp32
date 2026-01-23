@@ -2,11 +2,7 @@
 #include "constants.h"
 #include "global_config.h"
 #include "logger.h"
-#include "led_display.h"
 #include <TimeLib.h>
-
-// External display object
-extern MD_Parola M;
 
 // Singleton instance of the Clock class
 Clock &Clock::getInstance() {
@@ -16,15 +12,7 @@ Clock &Clock::getInstance() {
 
 // Initialize the clock
 void Clock::init() {
-  LOG_INFO("Clock::init() called");
   buildDisplaySequence();   // Build display sequence
-  LOG_INFO("Clock initialized: sequence length=" + String(displaySequenceLength) + 
-           ", initial index=0, lastChangeTime=" + String(lastChangeTime));
-  
-  if (displaySequenceLength == 0) {
-    LOG_ERROR("ERROR: Display sequence is empty! buildDisplaySequence() failed!");
-  }
-  
   currentDisplayIndex = 0;  // Reset index
   lastDisplayedMinute = -1; // Initialize minute tracking
   lastChangeTime = millis();
@@ -42,81 +30,25 @@ void Clock::loop() {
   unsigned long currentTime = millis();
 
   // Check if enough time has passed since last change
-  // Add small buffer (100ms) to prevent rapid re-triggering
-  unsigned long timeSinceLastChange = currentTime - lastChangeTime;
-  bool timeExpired = timeSinceLastChange >= ((Timing::CLOCK_INTERVAL_SEC * 1000UL) - 100);
+  bool timeExpired =
+      (currentTime - lastChangeTime) >= (Timing::CLOCK_INTERVAL_SEC * 1000UL);
 
   // Check if animation is finished (returns true if done)
-  bool animationDone = displayAnimate();
-  
-  // Log state periodically for debugging
-  static unsigned long lastDebugLog = 0;
-  if (currentTime - lastDebugLog > 10000) { // Every 10 seconds
-    lastDebugLog = currentTime;
-    LOG_INFO("Clock state: index=" + String(currentDisplayIndex) + 
-             ", timeSinceLastChange=" + String(timeSinceLastChange) + 
-             "ms, timeExpired=" + String(timeExpired ? "true" : "false") + 
-             ", animationDone=" + String(animationDone ? "true" : "false"));
-  }
-
   // We only proceed if BOTH time has expired AND animation is done
-  if (!timeExpired) {
-    return;  // Time hasn't expired yet, nothing to do
-  }
-  
-  if (!animationDone) {
-    return;  // Animation still in progress, wait
-  }
+  if (timeExpired && displayAnimate()) {
 
-  // Both conditions met: time expired AND animation done
-  int previousIndex = currentDisplayIndex;
-  LOG_INFO("Clock loop: conditions met, moving from index " + String(previousIndex) + " to next");
-  
-  // CRITICAL: Update timer FIRST to prevent immediate re-trigger in same loop iteration
-  lastChangeTime = currentTime;
-  
-  // Move to next element or start from beginning
-  currentDisplayIndex++;
-  
-  if (currentDisplayIndex >= displaySequenceLength) {
-    currentDisplayIndex = 0;
-    // Only log if we actually moved from last element to first
-    if (previousIndex == displaySequenceLength - 1) {
-      LOG_INFO_F("Display cycle completed, restarting");
+    // Move to next element or start from beginning
+    currentDisplayIndex++;
+    if (currentDisplayIndex >= displaySequenceLength) {
+      currentDisplayIndex = 0;
+      LOG_VERBOSE_F("Display cycle completed, restarting");
     }
-    // Clear last displayed text to force update of first element
-    lastDisplayedText = "";
-  }
 
-  LOG_INFO("Clock loop: index changed from " + String(previousIndex) + " to " + String(currentDisplayIndex) + 
-           " (sequence length=" + String(displaySequenceLength) + ")");
-
-  // Execute current action from sequence
-  if (displaySequenceLength > 0 && currentDisplayIndex < displaySequenceLength) {
-    // Log which element we're displaying (for debugging) - use INFO level so it's visible
-    String elementName = "Unknown";
-    if (displaySequence[currentDisplayIndex] == &Clock::displayTime) elementName = "Time";
-    else if (displaySequence[currentDisplayIndex] == &Clock::displayDate) elementName = "Date";
-    else if (displaySequence[currentDisplayIndex] == &Clock::displayDay) elementName = "Day";
-    else if (displaySequence[currentDisplayIndex] == &Clock::displayWeather) elementName = "Weather";
-    else if (displaySequence[currentDisplayIndex] == &Clock::displayMaxTemp) elementName = "Feels Like";
-    else if (displaySequence[currentDisplayIndex] == &Clock::displayPressure) elementName = "Pressure";
-    else if (displaySequence[currentDisplayIndex] == &Clock::displayWeatherHumidity) elementName = "Weather Humidity";
-    else if (displaySequence[currentDisplayIndex] == &Clock::displayWeatherDescription) elementName = "Weather Description";
-    else if (displaySequence[currentDisplayIndex] == &Clock::displayUSD) elementName = "USD";
-    else if (displaySequence[currentDisplayIndex] == &Clock::displayEUR) elementName = "EUR";
-    else if (displaySequence[currentDisplayIndex] == &Clock::displayBTC) elementName = "BTC";
-    else if (displaySequence[currentDisplayIndex] == &Clock::displayHomeTemp) elementName = "Home Temp";
-    else if (displaySequence[currentDisplayIndex] == &Clock::displayHomeHumidity) elementName = "Home Humidity";
-    
-    LOG_INFO(">> Displaying element [" + String(currentDisplayIndex) + "/" + String(displaySequenceLength - 1) + "]: " + elementName);
-    
-    // Execute the action (this sets newMessageAvailable via drawStringMax)
-    executeDisplayAction();
-    
-    // After execution, newMessageAvailable is set and realDisplayText() will handle it
-  } else {
-    LOG_ERROR("Clock loop: Invalid index " + String(currentDisplayIndex) + " or sequence length " + String(displaySequenceLength));
+    // Execute current action from sequence
+    if (displaySequenceLength > 0) {
+      executeDisplayAction();
+      lastChangeTime = currentTime; // Reset timer
+    }
   }
 }
 
@@ -144,10 +76,10 @@ void Clock::displayEUR() { currencyManager.displayEURToScreen(); }
 void Clock::displayBTC() { currencyManager.displayBTCToScreen(); }
 void Clock::displayHomeTemp() { dht22_manager.printHomeTemp(); }
 void Clock::displayHomeHumidity() { dht22_manager.printHumidity(); }
+void Clock::displayCalendar() { calendarManager.printNextEventToScreen(); }
 
 // Builds display sequence based on available data
 void Clock::buildDisplaySequence() {
-  LOG_INFO("buildDisplaySequence() called");
   int index = 0;
 
   // Always show time and date
@@ -184,12 +116,13 @@ void Clock::buildDisplaySequence() {
     displaySequence[index++] = &Clock::displayHomeHumidity;
   }
 
+  // Calendar events
+  displaySequence[index++] = &Clock::displayTime;
+  displaySequence[index++] = &Clock::displayCalendar;
+
   displaySequenceLength = index;
-  LOG_INFO("Display sequence built with " + String(displaySequenceLength) + " items");
-  
-  if (displaySequenceLength == 0) {
-    LOG_ERROR("ERROR: buildDisplaySequence() resulted in empty sequence!");
-  }
+  LOG_DEBUG("Display sequence built with " + String(displaySequenceLength) +
+            " items");
 }
 
 // Checks for minute change and switches to time display
@@ -197,20 +130,26 @@ void Clock::checkMinuteChange() {
   // Get current minute using TimeLib (more reliable)
   int currentMinute = minute();
 
-  // If minute changed
+  // If minute changed and we're not showing time
   if (lastDisplayedMinute != -1 && currentMinute != lastDisplayedMinute) {
     // Check if we're currently showing time
     bool isCurrentlyShowingTime =
         (displaySequence[currentDisplayIndex] == &Clock::displayTime);
 
-    if (isCurrentlyShowingTime) {
-      // If already showing time, just update the display text
-      // BUT DON'T reset lastChangeTime - let the normal cycle continue!
-      executeDisplayAction();
-      LOG_INFO("Minute changed to " + String(currentMinute) + ", updated time display (timer not reset)");
+    if (!isCurrentlyShowingTime) {
+      // Find next time index and switch to it
+      int nextTimeIndex = findNextTimeIndex();
+      if (nextTimeIndex != -1) {
+        currentDisplayIndex = nextTimeIndex;
+        executeDisplayAction(); // Immediately show time
+        lastChangeTime =
+            millis(); // Reset timer so this display stays for full duration
+        LOG_VERBOSE("Minute changed, switched to time display");
+      }
     } else {
-      // Not showing time - don't interrupt, let normal sequence continue
-      LOG_INFO("Minute changed to " + String(currentMinute) + ", continuing normal sequence");
+      // If already showing time, just update it
+      executeDisplayAction();
+      lastChangeTime = millis(); // Reset timer
     }
   }
 
@@ -244,6 +183,8 @@ WeatherManager &Clock::getWeatherManager() { return weatherManager; }
 
 CurrencyManager &Clock::getCurrencyManager() { return currencyManager; }
 
+CalendarManager &Clock::getCalendarManager() { return calendarManager; }
+
 // Initialize clock process
 void init_clock_process() { Clock::getInstance().init(); }
 
@@ -252,4 +193,3 @@ void detachInterrupt_clock_process() { Clock::getInstance().detach(); }
 
 // Main clock loop
 void clock_loop() { Clock::getInstance().loop(); }
-

@@ -15,4 +15,3 @@ void update_error(int err);
 
 void web_ota_init();
 void update_ota();
-

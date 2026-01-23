@@ -1,5 +1,4 @@
 #include "dht22_manager.h"
-// #include "board_led.h"  // Disabled - board LED not used
 #include "logger.h"
 
 // Define global variables
@@ -52,10 +51,21 @@ void Dht22_manager::printHumidity() {
     readAndPrintHumidity();
 }
 
-// Function to print detailed sensor information - simplified to reduce code size
+// Function to print detailed sensor information
 void Dht22_manager::printSensorDetails(sensor_t sensor, const char* type) {
-    // Simplified - removed verbose logging to reduce code size
-    LOG_INFO(String(type) + " sensor initialized");
+    LOG_DEBUG_F("------------------------------------");
+    LOG_DEBUG(String(type));
+
+    LOG_VERBOSE("Sensor: " + String(sensor.name));
+    LOG_VERBOSE("Driver Ver: " + String(sensor.version));
+    LOG_VERBOSE("Unique ID: " + String(sensor.sensor_id));
+
+    const char* unit = (strcmp(type, "Temperature") == 0) ? " *C" : " %";
+
+    LOG_VERBOSE("Max Value: " + String(sensor.max_value) + String(unit));
+    LOG_VERBOSE("Min Value: " + String(sensor.min_value) + String(unit));
+    LOG_VERBOSE("Resolution: " + String(sensor.resolution) + String(unit));
+    LOG_DEBUG_F("------------------------------------");
 }
 
 // Function to read and print temperature to the display
@@ -66,10 +76,8 @@ void Dht22_manager::readAndPrintTemperature() {
         handleTemperatureError();
     } else {
         homeTemp = event.temperature;
-        LOG_INFO("Home temperature: " + String(homeTemp, 2) + "°C");
+        LOG_VERBOSE("Temperature: " + String(homeTemp, 2) + " *C");
         String tape = String("T") + String(round(homeTemp), 0) + getGradValue() + "C";
-        LOG_INFO(">> Display: Home Temp = " + tape);
-        // changeLEDColorForDisplay(DISPLAY_HOME_TEMP);  // Disabled - board LED not used
         drawString(tape);
     }
 }
@@ -82,11 +90,9 @@ void Dht22_manager::readAndPrintHumidity() {
         handleHumidityError();
     } else {
         homeHumidity = event.relative_humidity + humidity_delta;
-        LOG_INFO("Home humidity: " + String(homeHumidity, 2) + "%");
+        LOG_VERBOSE("Humidity: " + String(homeHumidity, 2) + "%");
         String tape = String(round(homeHumidity), 0) + "%";
         tape = tape.length() == 4 ? String("H") + tape : String("H ") + tape;
-        LOG_INFO(">> Display: Home Humidity = " + tape);
-        // changeLEDColorForDisplay(DISPLAY_HOME_HUMIDITY);  // Disabled - board LED not used
         drawString(tape);
     }
 }
@@ -102,4 +108,3 @@ void Dht22_manager::handleHumidityError() {
     dht22Start();  // Restart the DHT sensor
     LOG_ERROR_F("Error reading humidity!");
 }
-

@@ -19,6 +19,10 @@ inline void setupSecureClient(WiFiClientSecure& client, const char* domain = nul
     
     client.setInsecure();
     
-    // Removed verbose logging to reduce code size
+    if (domain) {
+        LOG_WARNING("Using insecure SSL connection for: " + String(domain) + 
+                   " (consider adding certificate validation)");
+    } else {
+        LOG_DEBUG_F("Secure client configured (insecure mode)");
+    }
 }
-

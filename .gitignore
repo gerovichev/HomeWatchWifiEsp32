@@ -1,33 +1,78 @@
-# Prerequisites
+# Arduino/ESP32 build files
 *.d
-
-# Compiled Object files
-*.slo
-*.lo
 *.o
+*.elf
+*.bin
+*.hex
+*.map
+*.eep
+*.elf
+*.bin
+
+# Build directories
+build/
+.vscode/
+.idea/
+
+# Object files
+*.ko
 *.obj
+*.ilk
+*.exp
 
 # Precompiled Headers
 *.gch
 *.pch
 
-# Compiled Dynamic libraries
-*.so
-*.dylib
-*.dll
-
-# Fortran module files
-*.mod
-*.smod
-
-# Compiled Static libraries
-*.lai
-*.la
-*.a
+# Libraries
 *.lib
+*.a
+*.la
+*.lo
+
+# Shared objects (inc. Windows DLLs)
+*.dll
+*.so
+*.so.*
+*.dylib
 
 # Executables
 *.exe
 *.out
 *.app
+*.i*86
+*.x86_64
+
+# Debug files
+*.dSYM/
+*.su
+*.idb
+*.pdb
+
+# Kernel Module Compile Results
+*.mod*
+*.cmd
+.tmp_versions/
+modules.order
+Module.symvers
+Mkfile.old
+dkms.conf
+
+# Secret files (API keys, credentials)
+# Note: Secret.h is published as a template, but Secret.cpp with real keys is not
 Secret.cpp
+
+# Birthday data file with real personal data
+# Note: birthdays.h is published as a template, but BIRTHDAYS.cpp with real data is not
+BIRTHDAYS.cpp
+
+# OS files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# IDE files
+*.sublime-project
+*.sublime-workspace

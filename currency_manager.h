@@ -1,4 +1,3 @@
-// CurrencyManager.h
 #pragma once
 
 #include "global_config.h"
@@ -37,4 +36,3 @@ private:
   float readCurrency(const char *path);
   float readCrypto(const char *path);
 };
-

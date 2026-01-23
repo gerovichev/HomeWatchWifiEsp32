@@ -7,7 +7,7 @@ String lang_weather;
 unsigned int sunrise;
 unsigned int sunset;
 
-String version_prg = "251219";
+String version_prg = "260123";
 char grad = '\x60';
 
 float humidity_delta = 0.00;
@@ -22,36 +22,26 @@ String daysOfTheWeek[7];
 boolean IS_DHT_CONNECTED = false;
 bool isWebClientNeeded = true;
 boolean isReadWeather = true;
-int displayIntensity = 2;  // Default intensity value
 
 // Function to return the degree character based on the language
 char getGradValue() {
   return grad;
 }
 
-// Helper function to get MAC address for ESP32
-String getMacAddress() {
-  uint8_t mac[6];
-  esp_err_t err = esp_read_mac(mac, ESP_MAC_WIFI_STA);
-  if (err == ESP_OK) {
-    char macStr[18];
-    snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
-             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-    return String(macStr);
-  } else {
-    // Fallback: try WiFi.macAddress() if WiFi is initialized
-    if (WiFi.status() != WL_CONNECTED) {
-      WiFi.mode(WIFI_STA);
-    }
-    return WiFi.macAddress();
-  }
-}
-
 // Initialize the device configuration based on the MAC address
 void initPerDevice() {
   setDeviceConfig();  // Load configuration for the device
 
-  String macAddr = getMacAddress();
+  uint8_t mac[6];
+  String macAddr;
+  if (esp_read_mac(mac, ESP_MAC_WIFI_STA) == ESP_OK) {
+    char macStr[18];
+    snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    macAddr = String(macStr);
+  } else {
+    macAddr = WiFi.macAddress();
+  }
   LOG_INFO("MAC: " + macAddr);
 
   macAddrSt = macAddr;
@@ -69,8 +59,7 @@ void initPerDevice() {
     nameofWatch = config.nameofWatch;
     isOTAreq = config.isOTAreq;
     isMQTT = config.isMQTT;
-    displayIntensity = config.intensity;  // Store intensity from config
-    setIntensity(displayIntensity);  // Set LED intensity based on the config
+    setIntensity(config.intensity);  // Set LED intensity based on the config
     mqtt_topic_str = hostname_m + String(mqtt_topic);
     
     LOG_INFO("Device configured: " + hostname_m);
@@ -118,4 +107,3 @@ String getNumberWithZerro(int dig) {
 void drawString(String tape) {
   drawStringMax(tape);
 }
-

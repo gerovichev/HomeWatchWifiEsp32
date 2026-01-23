@@ -2,7 +2,6 @@
 #include "secure_client.h"
 #include "constants.h"
 #include "logger.h"
-// #include "board_led.h"  // Disabled - board LED not used
 
 WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP);
@@ -18,7 +17,7 @@ int maxAttemptsTimes = Retry::MAX_ATTEMPTS_TIMEZONE;
 
 void getTimezone() {
   LOG_DEBUG_F("Checking timezone...");
-  // Removed verbose logging
+  LOG_VERBOSE("Zone end: " + String(zoneEnd) + ", Current time: " + String(timeNow));
 
   if (zoneEnd > timeNow) {
     time_t untilTimeMove = zoneEnd - timeNow;
@@ -52,12 +51,12 @@ void getTimezone() {
 
       if (httpCode == HTTP_CODE_OK) {
         String payload = http.getString();
-        // Removed verbose logging
+        LOG_VERBOSE("Timezone API response: " + payload);
 
         StaticJsonDocument<Buffer::JSON_TIMEZONE_SIZE> doc;  // Timezone API response: status, offset, zoneStart, zoneEnd, cityName
         DeserializationError error = deserializeJson(doc, payload);
         if (!error) {
-          // Removed verbose logging
+          LOG_VERBOSE_F("Timezone JSON deserialization succeeded");
           JsonObject root = doc.as<JsonObject>();
 
           const char* status = root["status"];
@@ -103,30 +102,22 @@ void getTimezone() {
 
 void printTimeToScreen() {
   String tape = timeClient.getFormattedTime().substring(0, 5);
-  LOG_INFO(">> Display: Time = " + tape);
-  // changeLEDColorForDisplay(DISPLAY_TIME);  // Disabled - board LED not used
   drawString(tape);
 }
 
 void printDateToScreen() {
   time_t epochTime = timeClient.getEpochTime();
   struct tm* ptm = gmtime((time_t*)&epochTime);
-  String tape = getNumberWithZerro(ptm->tm_mday) + String("/") + getNumberWithZerro(ptm->tm_mon + 1);
-  LOG_INFO(">> Display: Date = " + tape);
-  // changeLEDColorForDisplay(DISPLAY_DATE);  // Disabled - board LED not used
+  String tape = getNumberWithZerro(ptm->tm_mday) + F("/") + getNumberWithZerro(ptm->tm_mon + 1);
   drawString(tape);
 }
 
 void printDayToScreen() {
   String tape = daysOfTheWeek[timeClient.getDay()];
-  LOG_INFO(">> Display: Day = " + tape);
-  // changeLEDColorForDisplay(DISPLAY_DAY);  // Disabled - board LED not used
   drawString(tape);
 }
 
 void printCityToScreen() {
-  LOG_INFO(">> Display: City = " + city_name);
-  // changeLEDColorForDisplay(DISPLAY_SETUP);  // Disabled - board LED not used
   displayTextInSetup(city_name);
 }
 
@@ -135,10 +126,6 @@ void ntp_init() {
   timeClient.begin();
   getTimezone();
   timeClient.update();
-  timeNow = timeClient.getEpochTime();
-  LOG_INFO("NTP synchronized successfully");
-  LOG_INFO("Current time: " + timeClient.getFormattedTime());
-  LOG_INFO("Epoch time: " + String(timeNow));
+  LOG_INFO("NTP synchronized, current time: " + timeClient.getFormattedTime());
   printCityToScreen();
 }
-

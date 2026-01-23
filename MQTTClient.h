@@ -1,5 +1,3 @@
-// File: MQTTClient.h
-
 #pragma once
 
 #include <WiFi.h>
@@ -19,4 +17,3 @@ extern PubSubClient client;
 void reconnect();
 void setup_mqtt();
 void publish_temperature();
-

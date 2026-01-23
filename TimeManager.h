@@ -25,4 +25,3 @@ void printDateToScreen();
 void printDayToScreen();
 void printCityToScreen();
 void ntp_init();
-

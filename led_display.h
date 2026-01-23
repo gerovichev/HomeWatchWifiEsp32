@@ -1,26 +1,47 @@
 #pragma once
 
 #include <MD_Parola.h>
+#include <vector>
 #include "fonts.h"
 #include "global_config.h"
 
 // Define the number of devices in the chain and the hardware interface
-// If all LEDs are on, try changing to GENERIC_HW or other types
-#define HARDWARE_TYPE MD_MAX72XX::FC16_HW // Changed from FC16_HW - more compatible
-#define MAX_DEVICES 4  // Change to 1, 2, or 4 depending on your setup
+#define HARDWARE_TYPE MD_MAX72XX::FC16_HW
+#define MAX_DEVICES 4
 
-// ESP32-C3 pin configuration for GOOUUU-ESP32-C3
-// SPI pins for MAX7219 LED matrix
-#define CLK_PIN 6   // Clock pin (GPIO6) - SPI CLK
-#define DATA_PIN 7   // Data pin (GPIO7) - SPI MOSI
-#define CS_PIN 5     // Chip select pin (GPIO5) - SPI CS
+// Pin configuration for different ESP32 boards
+// Detect ESP32-C3 (GOOUUU-ESP32-C3) vs standard ESP32
+#if defined(CONFIG_FREERTOS_UNICORE) || defined(ESP32C3) || defined(CONFIG_IDF_TARGET_ESP32C3)
+  // ESP32-C3 (GOOUUU-ESP32-C3) configuration
+  // According to https://docs.cirkitdesigner.com/component/2c3dcfa5-a9b9-4f6a-8905-3a8f902bc0a6/goouuu-esp32-c3
+  #define CLK_PIN 7   // Clock pin (GPIO7) - SPI CLK
+  #define DATA_PIN 5  // Data pin (GPIO5) - SPI MOSI
+  #define CS_PIN 6    // Chip select pin (GPIO6) - SPI CS
+  #define USE_EXPLICIT_SPI_PINS 1  // ESP32-C3 requires explicit SPI pins in constructor
+#else
+  // Standard ESP32 configuration
+  #define CLK_PIN 18  // Clock pin (GPIO18) - SPI CLK
+  #define DATA_PIN 23 // Data pin (GPIO23) - SPI MOSI
+  #define CS_PIN 5    // Chip select pin (GPIO5) - SPI CS
+  #define USE_EXPLICIT_SPI_PINS 0  // Standard ESP32 uses hardware SPI (only CS needed)
+#endif
 
 // LED_MAX_BUF moved to constants.h as Buffer::LED_BUFFER_SIZE
 
 extern bool newMessageAvailable;
-extern String lastDisplayedText;
 
-// LEDBuffer class removed to reduce code size
+// Class to manage LED buffer
+class LEDBuffer {
+public:
+  LEDBuffer(size_t size);
+  void clearBuffer();
+  char* getBuffer();
+  size_t getBufferSize() const;
+
+private:
+  std::vector<char> buffer;
+  size_t bufferSize;
+};
 
 // Function declarations
 void setIntensity(byte intensity);
@@ -35,4 +56,3 @@ void displayTextInSetup(const String& text);
 bool displayAnimate();
 void matrixSetup();
 void printText(String text);
-

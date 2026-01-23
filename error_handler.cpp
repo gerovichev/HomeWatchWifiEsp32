@@ -26,7 +26,8 @@ ErrorHandler::ErrorAction ErrorHandler::handleError(ErrorType type, const String
         
         case ERROR_CRITICAL:
             // Critical errors: restart device
-            delay(500);  // Give time for log to flush
+            LOG_ERROR_F("Critical error detected, restarting device...");
+            delay(1000);  // Give time for log to flush
             ESP.restart();
             return ACTION_RESTART;
         
@@ -71,4 +72,3 @@ bool ErrorHandler::shouldRetry(ErrorType type, int attemptCount, int maxAttempts
             return false;
     }
 }
-

@@ -2,12 +2,12 @@
 
 // Timing constants
 namespace Timing {
-    constexpr int CLOCK_INTERVAL_SEC = 5;
-    constexpr int DATA_UPDATE_INTERVAL_SEC = 900;  // 15 minutes
+    constexpr int CLOCK_INTERVAL_SEC = 6;
+    constexpr int DATA_UPDATE_INTERVAL_SEC = 1200;  // 15 minutes
     constexpr int WIFI_TIMEOUT_MS = 10000;
     constexpr int HTTP_TIMEOUT_MS = 1500;
     constexpr int HTTP_TIMEOUT_CURRENCY_MS = 3000;
-    constexpr int OTA_CLIENT_TIMEOUT_MS = 2000;
+    constexpr int OTA_CLIENT_TIMEOUT_MS = 15000;
     constexpr int RETRY_DELAY_MS = 2000;
     constexpr int MQTT_RECONNECT_DELAY_MS = 5000;
     constexpr int NTP_SYNC_WAIT_MS = 500;
@@ -32,21 +32,21 @@ namespace Display {
     constexpr int INTENSITY_NIGHT = 0;
 }
 
-// Buffer sizes - optimized for memory
+// Buffer sizes
 namespace Buffer {
-    constexpr size_t LED_BUFFER_SIZE = 256;  // Reduced from 512
-    constexpr size_t JSON_WEATHER_SIZE = 768;  // Reduced from 1024
-    constexpr size_t JSON_TIMEZONE_SIZE = 384;  // Reduced from 512
-    constexpr size_t JSON_CURRENCY_SIZE = 256;  // Reduced from 512
-    constexpr size_t JSON_LOCATION_SIZE = 192;  // Reduced from 256
-    constexpr size_t PATH_BUFFER_SIZE = 256;  // Reduced from 512
-    constexpr size_t TIME_STRING_SIZE = 16;  // Reduced from 20
+    constexpr size_t LED_BUFFER_SIZE = 512;
+    constexpr size_t JSON_WEATHER_SIZE = 1024;
+    constexpr size_t JSON_TIMEZONE_SIZE = 512;
+    constexpr size_t JSON_CURRENCY_SIZE = 512;
+    constexpr size_t JSON_LOCATION_SIZE = 256;
+    constexpr size_t PATH_BUFFER_SIZE = 512;
+    constexpr size_t TIME_STRING_SIZE = 20;
     constexpr size_t TEMP_STRING_SIZE = 8;
 }
 
 // Sensor constants
 namespace Sensor {
-    constexpr int DHT_PIN = 2;  // GPIO2 for ESP32-C3 (safer than GPIO12)
+    constexpr int DHT_PIN = 12;
     constexpr float HUMIDITY_DELTA_DEFAULT = 0.00;
 }
 
@@ -54,5 +54,8 @@ namespace Sensor {
 namespace NetworkConfig {
     constexpr int WIFI_RECONNECT_ATTEMPTS = 20;
     constexpr unsigned long WIFI_CONNECT_TIMEOUT_MS = 10000;
+    constexpr int WIFI_INIT_RETRY_ATTEMPTS = 5;  // Количество попыток подключения при старте
+    constexpr unsigned long WIFI_INIT_RETRY_DELAY_MS = 5000;  // Задержка между попытками (5 секунд)
+    constexpr unsigned long WIFI_INIT_SINGLE_ATTEMPT_TIMEOUT_MS = 15000;  // Таймаут одной попытки (15 секунд)
 }
 

@@ -22,4 +22,3 @@ void setClock();
 void getLocationAPI(String ip);
 String getIp();
 void location_init();
-

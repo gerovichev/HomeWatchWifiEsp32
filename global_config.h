@@ -1,7 +1,7 @@
 #pragma once
 
 #include <ArduinoOTA.h>
-#include "secret.h"
+#include "Secret.h"
 #include "led_display.h"
 #include "logger.h"
 
@@ -24,11 +24,9 @@ extern String daysOfTheWeek[7];
 extern boolean IS_DHT_CONNECTED;
 extern bool isWebClientNeeded;
 extern boolean isReadWeather;
-extern int displayIntensity;  // Global variable to store intensity from config
 
 void initPerDevice();
 void verifyWifi();
 String getNumberWithZerro(int dig);
 void drawString(String tape);
 char getGradValue();
-

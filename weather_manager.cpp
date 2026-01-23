@@ -7,7 +7,6 @@
 #include "secure_client.h"
 #include "constants.h"
 #include "logger.h"
-// #include "board_led.h"  // Disabled - board LED not used
 
 WeatherManager::WeatherManager()
 {
@@ -48,8 +47,7 @@ void WeatherManager::readWeather() {
 
       if (httpCode == HTTP_CODE_OK) {  // Check the returning code
         String payload = http.getString();  // Get the request response payload
-        LOG_INFO("Weather API response received, size: " + String(payload.length()) + " bytes");
-        // LOG_VERBOSE("Weather API response: " + payload); // Disabled to save code size
+        LOG_VERBOSE("Weather API response: " + payload);
 
         StaticJsonDocument<Buffer::JSON_WEATHER_SIZE> doc;  // Weather API response with current weather data
         DeserializationError error = deserializeJson(doc, payload);
@@ -106,8 +104,6 @@ void WeatherManager::readWeather() {
 // Function to print temperature on the screen
 void WeatherManager::printWeatherToScreen() const{
   String tape = String(temperature, DEC) + getGradValue() + String("C");
-  LOG_INFO(">> Display: Weather Temp = " + tape);
-  // changeLEDColorForDisplay(DISPLAY_WEATHER);  // Disabled - board LED not used
   drawString(tape);
 }
 
@@ -115,31 +111,22 @@ void WeatherManager::printWeatherToScreen() const{
 void WeatherManager::printMaxTempToScreen() const{
   // Very short format to fit on display: "~25°C" (tilde ~ means "feels like")
   String tape = String("~") + String(temp_max, DEC) + getGradValue() + String("C");
-  LOG_INFO(">> Display: Feels Like = " + tape);
-  // changeLEDColorForDisplay(DISPLAY_TEMP);  // Disabled - board LED not used
   drawString(tape);
 }
 
 // Function to print pressure on the screen
 void WeatherManager::printPressureToScreen() const{
   String tape = String(pressure, DEC) + String("mm");
-  LOG_INFO(">> Display: Pressure = " + tape);
-  // changeLEDColorForDisplay(DISPLAY_PRESSURE);  // Disabled - board LED not used
   drawString(tape);
 }
 
 // Function to print humidity on the screen
 void WeatherManager::printHumidityToScreen() const{
   String tape = String(main_ext_humidity, DEC) + String("%");
-  LOG_INFO(">> Display: Weather Humidity = " + tape);
-  // changeLEDColorForDisplay(DISPLAY_HUMIDITY);  // Disabled - board LED not used
   drawString(tape);
 }
 
 // Function to print weather description on the screen
-void WeatherManager::printDescriptionWeatherToScreen() const {
-  LOG_INFO(">> Display: Weather Description = " + description_weather);
-  // changeLEDColorForDisplay(DISPLAY_WEATHER_DESC);  // Disabled - board LED not used
+void WeatherManager::printDescriptionWeatherToScreen() const {  
   drawString(description_weather);
 }
-

@@ -4,11 +4,29 @@
 
 // Global variables
 bool newMessageAvailable = false;
-MD_Parola M = MD_Parola(HARDWARE_TYPE, DATA_PIN, CLK_PIN, CS_PIN, MAX_DEVICES);
-//MD_Parola(HARDWARE_TYPE, CS_PIN, MAX_DEVICES);
+
+// Initialize MD_Parola with appropriate constructor based on board type
+#if USE_EXPLICIT_SPI_PINS
+  // ESP32-C3 (GOOUUU-ESP32-C3): requires explicit SPI pins
+  MD_Parola M = MD_Parola(HARDWARE_TYPE, DATA_PIN, CLK_PIN, CS_PIN, MAX_DEVICES);
+#else
+  // Standard ESP32: uses hardware SPI, only CS pin needed
+  MD_Parola M = MD_Parola(HARDWARE_TYPE, CS_PIN, MAX_DEVICES);
+#endif
+
 String lastDisplayedText = "";
 
-// LEDBuffer class removed to reduce code size
+// LEDBuffer class implementation
+LEDBuffer::LEDBuffer(size_t size) : bufferSize(size) {
+  buffer.resize(bufferSize);
+  clearBuffer();
+}
+
+void LEDBuffer::clearBuffer() { std::fill(buffer.begin(), buffer.end(), '\0'); }
+
+char *LEDBuffer::getBuffer() { return buffer.data(); }
+
+size_t LEDBuffer::getBufferSize() const { return bufferSize; }
 
 // Sets the intensity of the display
 void setIntensity(byte intensity) { M.setIntensity(intensity); }
@@ -26,11 +44,16 @@ String formatTime(time_t rawTime) {
 }
 
 // Sets the intensity based on the current time
-// Uses displayIntensity from config as base value
 void setIntensityByTime(time_t timeNow) {
-  // Use config intensity directly to respect user settings
-  // The intensity from config is stored in global variable displayIntensity
-  M.setIntensity(displayIntensity);
+  int intensity = (timeNow > sunrise && timeNow < sunset)
+                      ? Display::INTENSITY_DAY
+                      : Display::INTENSITY_NIGHT;
+
+  LOG_VERBOSE("sunrise: " + formatTime(sunrise));
+  LOG_VERBOSE("Time: " + formatTime(timeNow));
+  LOG_VERBOSE("sunset: " + formatTime(sunset));
+  LOG_VERBOSE("intensity: " + String(intensity));
+  M.setIntensity(intensity);
 }
 
 // Converts UTF-8 to Russian characters
@@ -71,25 +94,18 @@ String utf2rus(const String &source) {
 // Draws a string on the LED display
 void drawStringMax(const String &tape) {
   String convertedText = utf2rus(tape);
-  // Always update if text is different, or if lastDisplayedText is empty (forced update)
-  if (convertedText != lastDisplayedText || lastDisplayedText.length() == 0) {
+  if (convertedText != lastDisplayedText) {
     lastDisplayedText = convertedText;
     newMessageAvailable = true;
-    // LED color is changed in individual display functions, not here
   }
 }
 
 // Displays the text on the LED display
 void realDisplayText() {
-  // Always call displayAnimate() to keep animation running
-  // This must be called continuously for animations to work
-  bool animationDone = M.displayAnimate();
-  
-  // If animation is done and we have a new message, update display
-  if (animationDone && newMessageAvailable) {
+  if (M.displayAnimate() && newMessageAvailable) {
     newMessageAvailable = false;
     M.displayReset();
-    // LOG_INFO(">> Display: " + lastDisplayedText); // Disabled to reduce code size
+    LOG_INFO(">> Display: " + lastDisplayedText);
     M.displayClear();
 
     if (lastDisplayedText.length() > 5) {
@@ -109,7 +125,7 @@ void forceDisplayText() {
   if (newMessageAvailable) {
     newMessageAvailable = false;
     M.displayReset();
-    // LOG_INFO(">> Force Display: " + lastDisplayedText); // Disabled to reduce code size
+    LOG_INFO(">> Force Display: " + lastDisplayedText);
     M.displayClear();
 
     if (lastDisplayedText.length() > 5) {
@@ -126,15 +142,18 @@ void forceDisplayText() {
 
 // Wait for animation to complete
 void waitForAnimation() {
+  unsigned long startTime = millis();
   while (!displayAnimate()) {
+    if (millis() - startTime > 2000) {
+      LOG_WARNING_F("Display animation timeout");
+      break;
+    }
     delay(50);
   }
 }
 
 // Display text in setup (draw, force display, and wait for animation)
 void displayTextInSetup(const String &text) {
-  LOG_INFO(">> Display (Setup): " + text);
-  // changeLEDColorForDisplay(DISPLAY_SETUP);  // Disabled - board LED not used
   drawStringMax(text);
   forceDisplayText();
   waitForAnimation();
@@ -145,56 +164,34 @@ bool displayAnimate() { return M.displayAnimate(); }
 
 // Initializes the LED matrix display
 void matrixSetup() {
-  // Initialize SPI explicitly for ESP32-C3
-  // Note: MD_Parola should handle SPI, but explicit init helps with some modules
-  pinMode(CS_PIN, OUTPUT);
-  digitalWrite(CS_PIN, HIGH);  // CS high = deselected
-  
-  // Initialize the display
-  //SPI.begin();
   M.begin();
-  
-  // Clear display first to avoid all LEDs on
   M.displayClear();
-  delay(50);
-  
-  // Configure display settings
   M.displaySuspend(false);
   M.setInvert(false);
   M.setFont(CRMrusTxt);
-  
-  // Set intensity - start with low value to avoid all LEDs on
-  M.setIntensity(0);  // Start with minimum intensity
-  delay(50);
-  
-  // Clear again after configuration
-  M.displayClear();
-  delay(50);
-  
-  // Now set the proper intensity
-  M.setIntensity(Display::INTENSITY_NIGHT);
-  
-  // Reset and clear one more time
-  M.displayReset();
-  M.displayClear();
+  M.setIntensity(Display::INTENSITY_NIGHT); // Set visible intensity for startup
+
+  // Small delay to ensure display is ready
   delay(100);
 
-  // Test display with a simple character to verify it works
-  // If all LEDs are on, try changing HARDWARE_TYPE in led_display.h
-  // Common types: FC16_HW, GENERIC_HW, PAROLA_HW
-  
-  // Process display animation to ensure display is ready
-  for (int i = 0; i < 5; i++) {
+  // Display "MAX7201" immediately at startup with points
+  M.displayReset();
+  M.displayClear();
+  // M.displayText("MAX7201", PA_CENTER, 0, 0, PA_PRINT, PA_NO_EFFECT);
+
+  // Allow display to stabilize and show the text
+  delay(200);
+
+  // Process display animation to ensure text is shown
+  for (int i = 0; i < 10; i++) {
     M.displayAnimate();
     delay(50);
   }
-  
-  LOG_INFO_F("LED matrix initialized");
 }
 
 // Prints the given text on the LED display
 void printText(String text) {
-  LOG_INFO(">> Display (Print): " + text);
+  LOG_DEBUG("Printing text: " + text);
   char dataText[Buffer::LED_BUFFER_SIZE];
   utf2rus("     " + text).toCharArray(dataText, Buffer::LED_BUFFER_SIZE);
 
@@ -212,4 +209,3 @@ void printText(String text) {
     M.print(&dataText[5]);
   }
 }
-

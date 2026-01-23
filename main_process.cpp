@@ -1,197 +1,185 @@
 #include "main_process.h"
 #include "device_state.h"
+#include "calendar_manager.h"
 
 #include "constants.h"
-// #include "board_led.h"  // Disabled - board LED not used
-#include "multicore_tasks.h"
 #include <WiFi.h>
 #include <TimeLib.h> // For advanced time manipulation
-#include <Ticker.h>
 
 bool isRunWeather = false;
 
 Ticker updateDataTicker;
 
+// WiFi reconnection tracking
+static unsigned long lastWiFiCheck = 0;
+constexpr unsigned long WIFI_CHECK_INTERVAL_MS = 60000;  // Check WiFi every 60 seconds
+
 // Timer interrupt handler to trigger weather and currency updates
-void IRAM_ATTR runAllUpdates() { 
-  isRunWeather = true;
-  dataUpdateRequested = true; // Signal data update task
-}
+void IRAM_ATTR runAllUpdates() { isRunWeather = true; }
 
 // Setup function, called once at startup
 void setup() {
   Logger::getInstance().begin(115200);
-  Logger::getInstance().setLogLevel(LOG_LEVEL_INFO); // Set to INFO to reduce code size
+  Logger::getInstance().setLogLevel(LOG_LEVEL_DEBUG); // Set desired log level
 
   LOG_INFO_F("Starting HomeWatchWifi ESP32...");
-  // Optimized logging - avoid String concatenation
-  if (Serial) {
-    Serial.print(F("[INFO]   "));
-    Serial.print(F(" "));
-    Serial.print(F("Version: "));
-    Serial.println(version_prg);
-  }
+  LOG_INFO("Version: " + version_prg);
 
-  LOG_INFO_F("Initializing device configuration...");
   initPerDevice();
-  LOG_INFO_F("Device configuration loaded");
-  
-  // Board LED initialization disabled
-  // LOG_INFO_F("Initializing board RGB LED...");
-  // initBoardLED();
-  
-  LOG_INFO_F("Setting up LED matrix display...");
   matrixSetup();
-  LOG_INFO_F("LED matrix display ready");
 
   // Optimize String concatenation
-  String helloMsg = "Hello " + DeviceState::getInstance().getWatchName();
+  String helloMsg;
+  helloMsg.reserve(10 + DeviceState::getInstance().getWatchName().length());
+  helloMsg = F("Hello ");
+  helloMsg += DeviceState::getInstance().getWatchName();
   displayTextInSetup(helloMsg);
 
   displayTextInSetup(version_prg);
 
   LOG_INFO_F("Initializing WiFi...");
-  displayTextInSetup("Connect WIFI");
+  displayTextInSetup(F("Connect WIFI"));
 
   WIFISetup wifiSetup;
   wifiSetup.wifi_init(); // Initialize Wi-Fi
 
   displayTextInSetup(WiFi.localIP().toString());
 
-  // Optimized logging - avoid String concatenation
-  if (Serial) {
-    Serial.print(F("[INFO]   "));
-    Serial.print(F(" "));
-    Serial.print(F("WiFi connected! IP Address: "));
-    Serial.println(WiFi.localIP());
-  }
-  // Optimized logging - avoid String concatenation
-  if (Serial) {
-    Serial.print(F("[INFO]   "));
-    Serial.print(F(" "));
-    Serial.print(F("WiFi RSSI: "));
-    Serial.print(WiFi.RSSI());
-    Serial.println(F(" dBm"));
-  }
+  LOG_INFO("IP Address: " + WiFi.localIP().toString());
 
   LOG_INFO_F("Initializing location services...");
   location_init();
-  // Optimized logging - avoid String concatenation
-  if (Serial) {
-    Serial.print(F("[INFO]   "));
-    Serial.print(F(" "));
-    Serial.print(F("Location initialized: lat="));
-    Serial.print(latitude, 6);
-    Serial.print(F(", lon="));
-    Serial.println(longitude, 6);
-  }
 
   LOG_INFO_F("Initializing NTP time...");
   ntp_init();
-  // Optimized logging - avoid String concatenation
-  if (Serial) {
-    Serial.print(F("[INFO]   "));
-    Serial.print(F(" "));
-    Serial.print(F("NTP time synchronized: "));
-    Serial.println(formatTime(timeNow));
-  }
 
   LOG_INFO_F("Starting DHT22 sensor...");
   Dht22_manager &dht22_manager = Clock::getInstance().getDht22();
   dht22_manager.dht22Start(); // Start DHT22 sensor
-  LOG_INFO_F("DHT22 sensor initialized");
 
   if (DeviceState::getInstance().isOtaRequired()) {
     LOG_INFO_F("Initializing OTA updates...");
     web_ota_init();
-    LOG_INFO_F("OTA updates ready");
-  } else {
-    LOG_INFO_F("OTA updates disabled");
   }
 
   if (DeviceState::getInstance().isMqttEnabled()) {
     LOG_INFO_F("Initializing MQTT client...");
     setup_mqtt(); // Initialize MQTT client
-    LOG_INFO_F("MQTT client initialized");
-  } else {
-    LOG_INFO_F("MQTT disabled");
   }
 
   timeNow = timeClient.getEpochTime(); // Get the current time
 
-  // Initialize clock process (builds display sequence) - MUST be before initMulticoreTasks
-  LOG_INFO_F("Initializing clock process...");
-  init_clock_process();
-  LOG_INFO_F("Clock process initialized");
-
-  // Load initial data immediately (weather and currency)
-  LOG_INFO_F("Loading initial weather and currency data...");
-  Clock::getInstance().getWeatherManager().readWeather();
-  LOG_INFO_F("Weather data loaded");
-  Clock::getInstance().getCurrencyManager().initialize();
-  LOG_INFO_F("Currency data loaded");
+  // Initialize calendar events
+  LOG_INFO_F("Initializing calendar events...");
+  Clock::getInstance().getCalendarManager().readCalendarEvents();
 
   isRunWeather = true; // Set flag to trigger weather updates
 
   // printCityToScreen();  // Display the city
 
-  // Initialize multicore tasks for parallel processing
-  initMulticoreTasks();
-  
-  // Set up ticker to trigger data updates (tasks will handle it)
+  // Set up ticker to call services every configured interval
   updateDataTicker.attach(Timing::DATA_UPDATE_INTERVAL_SEC, runAllUpdates);
-  // Optimized logging - avoid String concatenation
-  if (Serial) {
-    Serial.print(F("[INFO]   "));
-    Serial.print(F(" "));
-    Serial.print(F("Data update interval set to "));
-    Serial.print(Timing::DATA_UPDATE_INTERVAL_SEC);
-    Serial.println(F(" seconds"));
-  }
 
-  LOG_INFO_F("=== Setup completed successfully! ===");
-  // Optimized logging - avoid String concatenation
-  if (Serial) {
-    Serial.print(F("[INFO]   "));
-    Serial.print(F(" "));
-    Serial.print(F("Free heap: "));
-    Serial.print(ESP.getFreeHeap());
-    Serial.println(F(" bytes"));
-  }
-  // Optimized logging - avoid String concatenation
-  if (Serial) {
-    Serial.print(F("[INFO]   "));
-    Serial.print(F(" "));
-    Serial.print(F("Uptime: "));
-    Serial.print(millis() / 1000);
-    Serial.println(F(" seconds"));
-  }
-  #if USE_SINGLE_CORE
-    LOG_INFO_F("CPU: Single core (ESP32-C3) - tasks share Core 0");
-  #else
-    LOG_INFO_F("CPU: Dual core (ESP32) - Core 0: Display, Core 1: Data/Sensors/MQTT");
-  #endif
+  LOG_INFO_F("Setup completed successfully!");
 }
 
 // Function to fetch weather and currency data
-// NOTE: With multicore tasks, this function just signals the data update task
-// The actual work is done in dataUpdateTask on Core 1
 void fetchWeatherAndCurrency() {
   if (isRunWeather) {
     isRunWeather = false;
-    dataUpdateRequested = true; // Signal data update task on Core 1
-    LOG_DEBUG_F("Data update requested (will be handled by Core 1 task)");
+    LOG_INFO_F("Starting data update cycle...");
+
+    detachInterrupt_clock_process(); // Detach clock interrupt
+    LOG_DEBUG_F("Clock process detached");
+
+    //enableWiFi();
+
+    if (WiFi.status() == WL_CONNECTED) {
+      LOG_DEBUG_F("WiFi connected, updating services...");
+
+      if (DeviceState::getInstance().isOtaRequired()) {
+        LOG_DEBUG_F("Checking for OTA updates...");
+        update_ota(); // Handle OTA updates
+      }
+
+      LOG_DEBUG_F("Updating location...");
+      location_init();
+
+      if (DeviceState::getInstance().isMqttEnabled()) {
+        if (!client.connected()) {
+          LOG_WARNING_F("MQTT disconnected, reconnecting...");
+          reconnect(); // Reconnect to MQTT broker if needed
+        }
+        client.loop(); // Keep MQTT client running
+        LOG_DEBUG_F("Publishing temperature to MQTT...");
+        publish_temperature(); // Publish temperature to MQTT
+      }
+
+      LOG_DEBUG_F("Updating time from NTP...");
+      timeClient.update(); // Update the time from NTP server
+      timeNow = timeClient.getEpochTime();
+      setTime(timeNow);
+      LOG_VERBOSE("Current epoch time: " + String(timeNow));
+
+      LOG_DEBUG_F("Updating timezone...");
+      getTimezone(); // Update timezone info
+
+      LOG_DEBUG_F("Fetching weather data...");
+      Clock::getInstance()
+          .getWeatherManager()
+          .readWeather(); // Fetch weather data
+
+      LOG_DEBUG_F("Fetching currency rates...");
+      Clock::getInstance()
+          .getCurrencyManager()
+          .initialize(); // Initialize currency data
+
+      LOG_DEBUG_F("Updating calendar events...");
+      CalendarManager &calendarManager = Clock::getInstance().getCalendarManager();
+      if (calendarManager.shouldUpdateToday()) {
+        calendarManager.readCalendarEvents(); // Update calendar events
+      }
+
+      LOG_DEBUG_F("Adjusting display intensity...");
+      setIntensityByTime(timeNow); // Adjust display intensity based on time
+
+      LOG_INFO_F("Data update cycle completed successfully");
+    } else {
+      LOG_ERROR_F("WiFi not connected, skipping data update");
+    }
+
+    //disableWiFi();
+
+    init_clock_process(); // Reinitialize clock process
   }
 }
 
 // Main loop, called repeatedly
-// Note: With multicore tasks, main loop is simplified
-// Display updates are handled by displayTask on Core 0
-// Data updates are handled by dataUpdateTask on Core 1
 void loop() {
-  // Main loop now just yields to allow FreeRTOS scheduler
-  // All work is done in separate tasks on different cores
-  vTaskDelay(pdMS_TO_TICKS(100)); // Yield to other tasks
+  // Проверяем изменение минуты на каждой итерации (независимо от
+  // displayAnimate)
+  Clock::getInstance().checkMinuteChange();
+
+  // Periodically check WiFi connection and attempt reconnection if needed
+  unsigned long currentTime = millis();
+  if (currentTime - lastWiFiCheck > WIFI_CHECK_INTERVAL_MS) {
+    lastWiFiCheck = currentTime;
+    
+    if (WiFi.status() != WL_CONNECTED) {
+      LOG_DEBUG_F("WiFi disconnected, attempting to reconnect...");
+      WIFISetup wifiSetup;
+      wifiSetup.attemptReconnect();
+    }
+  }
+
+  if (displayAnimate()) {
+
+    fetchWeatherAndCurrency(); // Fetch weather and currency data
+    clock_loop();              // Handle clock logic
+    realDisplayText();         // Update the display
+  }
+
+  delay(1); // Yield to WiFi/FreeRTOS
 }
 
 // Function to enable Wi-Fi (if disabled)
@@ -223,13 +211,7 @@ void enableWiFi() {
   }
 
   // Connection successful
-  // Optimized logging - avoid String concatenation
-  if (Serial) {
-    Serial.print(F("[INFO]   "));
-    Serial.print(F(" "));
-    Serial.print(F("WiFi reconnected! IP: "));
-    Serial.println(WiFi.localIP());
-  }
+  LOG_INFO("WiFi reconnected! IP: " + WiFi.localIP().toString());
 }
 
 // Function to disable Wi-Fi
@@ -238,4 +220,3 @@ void disableWiFi() {
   WiFi.mode(WIFI_OFF);
   LOG_INFO_F("WiFi disabled to save power");
 }
-
