@@ -6,16 +6,11 @@
 #include <WiFi.h>
 #include <TimeLib.h> // For advanced time manipulation
 
-bool isRunWeather = false;
-
-Ticker updateDataTicker;
+SemaphoreHandle_t dataMutex = NULL;
 
 // WiFi reconnection tracking
 static unsigned long lastWiFiCheck = 0;
 constexpr unsigned long WIFI_CHECK_INTERVAL_MS = 60000;  // Check WiFi every 60 seconds
-
-// Timer interrupt handler to trigger weather and currency updates
-void IRAM_ATTR runAllUpdates() { isRunWeather = true; }
 
 // Setup function, called once at startup
 void setup() {
@@ -73,26 +68,33 @@ void setup() {
   LOG_INFO_F("Initializing calendar events...");
   Clock::getInstance().getCalendarManager().readCalendarEvents();
 
-  isRunWeather = true; // Set flag to trigger weather updates
-
   // printCityToScreen();  // Display the city
 
-  // Set up ticker to call services every configured interval
-  updateDataTicker.attach(Timing::DATA_UPDATE_INTERVAL_SEC, runAllUpdates);
+  dataMutex = xSemaphoreCreateMutex();
+  if (dataMutex != NULL) {
+    // Start data update task on Core 0
+    xTaskCreatePinnedToCore(
+      dataUpdateTask,
+      "DataUpdate",
+      8192,
+      NULL,
+      1,
+      NULL,
+      0 // Core 0
+    );
+  } else {
+    LOG_ERROR_F("Failed to create dataMutex!");
+  }
+
+  init_clock_process();
 
   LOG_INFO_F("Setup completed successfully!");
 }
 
-// Function to fetch weather and currency data
-void fetchWeatherAndCurrency() {
-  if (isRunWeather) {
-    isRunWeather = false;
+// Background task to fetch weather and currency data
+void dataUpdateTask(void *pvParameters) {
+  while (true) {
     LOG_INFO_F("Starting data update cycle...");
-
-    detachInterrupt_clock_process(); // Detach clock interrupt
-    LOG_DEBUG_F("Clock process detached");
-
-    //enableWiFi();
 
     if (WiFi.status() == WL_CONNECTED) {
       LOG_DEBUG_F("WiFi connected, updating services...");
@@ -148,9 +150,9 @@ void fetchWeatherAndCurrency() {
       LOG_ERROR_F("WiFi not connected, skipping data update");
     }
 
-    //disableWiFi();
-
-    init_clock_process(); // Reinitialize clock process
+    // Wait for the next update interval
+    // We use vTaskDelay to block the task efficiently for the given interval
+    vTaskDelay(pdMS_TO_TICKS(Timing::DATA_UPDATE_INTERVAL_SEC * 1000));
   }
 }
 
@@ -173,8 +175,6 @@ void loop() {
   }
 
   if (displayAnimate()) {
-
-    fetchWeatherAndCurrency(); // Fetch weather and currency data
     clock_loop();              // Handle clock logic
     realDisplayText();         // Update the display
   }

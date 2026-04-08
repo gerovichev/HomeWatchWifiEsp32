@@ -14,15 +14,15 @@
 #include "constants.h"
 
 // TIME_TO_CALL_SERVICES moved to constants.h as Timing::DATA_UPDATE_INTERVAL_SEC
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include <freertos/semphr.h>
 
-extern Ticker updateDataTicker;
-extern bool isRunWeather;
-//extern WeatherManager weatherManager;
+extern SemaphoreHandle_t dataMutex;
 
 // Function prototypes
-void IRAM_ATTR runAllUpdates();
 void setup();
-void fetchWeatherAndCurrency();
+void dataUpdateTask(void *pvParameters);
 void loop();
 void enableWiFi();
 void disableWiFi();

@@ -7,7 +7,7 @@ String lang_weather;
 unsigned int sunrise;
 unsigned int sunset;
 
-String version_prg = "260123";
+String version_prg = "260408";
 char grad = '\x60';
 
 float humidity_delta = 0.00;
@@ -20,7 +20,7 @@ String nameofWatch;
 String macAddrSt;
 String daysOfTheWeek[7];
 boolean IS_DHT_CONNECTED = false;
-bool isWebClientNeeded = true;
+boolean isWebClientNeeded = true;
 boolean isReadWeather = true;
 
 // Function to return the degree character based on the language

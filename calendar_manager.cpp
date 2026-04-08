@@ -5,6 +5,11 @@
 #include "led_display.h"
 #include "device_state.h"
 #include <TimeLib.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+#include "clock.h"
+
+extern SemaphoreHandle_t dataMutex;
 
 CalendarManager::CalendarManager() {
     // Initialize calendar data members
@@ -33,11 +38,13 @@ bool CalendarManager::matchesHostname(const char* eventHostname) const {
 
 // Find next upcoming event
 void CalendarManager::findNextEvent() {
+    if (dataMutex != NULL) xSemaphoreTake(dataMutex, portMAX_DELAY);
     hasEvent = false;
     nextEventTitle = "";
     nextEventTime = "";
     nextEventStartTime = 0;
     nextEventEndTime = 0;
+    if (dataMutex != NULL) xSemaphoreGive(dataMutex);
     
     if (calendarEventsCount == 0) {
         return;
@@ -174,6 +181,8 @@ void CalendarManager::findNextEvent() {
     }
     
     if (nextEvent != nullptr && minDaysAhead <= 365) {
+        if (dataMutex != NULL) xSemaphoreTake(dataMutex, portMAX_DELAY);
+        
         hasEvent = true;
         
         // Use board-specific title if available, otherwise use general title
@@ -199,9 +208,14 @@ void CalendarManager::findNextEvent() {
             nextEventTime = String("All day");
         }
         
-        LOG_INFO("Next event found: " + nextEventTitle + " on " + 
+        String logTitle = nextEventTitle;
+        String logTime = nextEventTime;
+        
+        if (dataMutex != NULL) xSemaphoreGive(dataMutex);
+        
+        LOG_INFO("Next event found: " + logTitle + " on " + 
                  String(nextEvent->month) + "-" + String(nextEvent->day) + 
-                 (nextEvent->fromHour >= 0 ? (" at " + nextEventTime) : " (all day)") +
+                 (nextEvent->fromHour >= 0 ? (" at " + logTime) : " (all day)") +
                  " (in " + String(minDaysAhead) + " days)");
     }
 }
@@ -261,7 +275,7 @@ void CalendarManager::printNextEventToScreen() const {
     time_t now = timeClient.getEpochTime();
     struct tm* timeinfo = gmtime(&now);
     if (timeinfo == nullptr) {
-        printTimeToScreen();
+        Clock::getInstance().skipCurrentDisplay();
         return;
     }
     
@@ -271,7 +285,7 @@ void CalendarManager::printNextEventToScreen() const {
     // Get event date from stored start time
     struct tm* eventTimeinfo = gmtime(&nextEventStartTime);
     if (eventTimeinfo == nullptr) {
-        printTimeToScreen();
+        Clock::getInstance().skipCurrentDisplay();
         return;
     }
     
@@ -283,8 +297,8 @@ void CalendarManager::printNextEventToScreen() const {
     // Only show events that are today
     if (!isEventToday) {
         LOG_DEBUG("Event is not today (current: " + String(currentMonth) + "/" + String(currentDay) + 
-                  ", event: " + String(eventMonth) + "/" + String(eventDay) + "), showing time instead");
-        printTimeToScreen();
+                  ", event: " + String(eventMonth) + "/" + String(eventDay) + "), skipping to next display");
+        Clock::getInstance().skipCurrentDisplay();
         return;
     }
     
@@ -297,8 +311,8 @@ void CalendarManager::printNextEventToScreen() const {
     // Check if we should display now (once per 15 minutes)
     // But always display if event is currently active (or if it's an all-day event)
     if (!shouldDisplayNow() && !isActive) {
-        // Skip display, show time instead
-        printTimeToScreen();
+        // Skip display, go to next
+        Clock::getInstance().skipCurrentDisplay();
         return;
     }
 

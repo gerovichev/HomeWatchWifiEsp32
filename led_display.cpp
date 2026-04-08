@@ -144,7 +144,7 @@ void forceDisplayText() {
 void waitForAnimation() {
   unsigned long startTime = millis();
   while (!displayAnimate()) {
-    if (millis() - startTime > 2000) {
+    if (millis() - startTime > 8000) {
       LOG_WARNING_F("Display animation timeout");
       break;
     }

@@ -7,6 +7,10 @@
 #include "secure_client.h"
 #include "constants.h"
 #include "logger.h"
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+
+extern SemaphoreHandle_t dataMutex;
 
 WeatherManager::WeatherManager()
 {
@@ -56,6 +60,11 @@ void WeatherManager::readWeather() {
         if (!error) {
           JsonObject current = doc[F("current")];
           unsigned int timezone_offset = doc[F("timezone_offset")];
+
+          if (dataMutex != NULL) {
+            xSemaphoreTake(dataMutex, portMAX_DELAY);
+          }
+
           sunrise = current[F("sunrise")];
           sunset = current[F("sunset")];
           sunrise += timezone_offset;
@@ -69,6 +78,10 @@ void WeatherManager::readWeather() {
           JsonObject weather = current[F("weather")][0];
           description_weather = String(weather[F("description")]);
           description_weather.toUpperCase();
+
+          if (dataMutex != NULL) {
+            xSemaphoreGive(dataMutex);
+          }
 
           LOG_INFO("Weather updated: " + String(temperature) + "°C, " + 
                    String(main_ext_humidity) + "%, " + String(pressure) + "mm");

@@ -46,17 +46,28 @@ void Clock::loop() {
 
     // Execute current action from sequence
     if (displaySequenceLength > 0) {
-      executeDisplayAction();
-      lastChangeTime = currentTime; // Reset timer
+      lastChangeTime = currentTime; // Reset timer before execution
+      executeDisplayAction();       // Action might override lastChangeTime via skipCurrentDisplay
     }
   }
 }
+
+#include "main_process.h"
 
 // Executes current action from sequence
 void Clock::executeDisplayAction() {
   if (currentDisplayIndex < displaySequenceLength &&
       displaySequence[currentDisplayIndex] != nullptr) {
-    (this->*displaySequence[currentDisplayIndex])();
+    if (dataMutex != NULL) {
+      if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        (this->*displaySequence[currentDisplayIndex])();
+        xSemaphoreGive(dataMutex);
+      } else {
+        LOG_WARNING_F("Failed to lock data mutex for display action");
+      }
+    } else {
+      (this->*displaySequence[currentDisplayIndex])();
+    }
   }
 }
 
@@ -155,6 +166,18 @@ void Clock::checkMinuteChange() {
 
   // Update last displayed minute
   lastDisplayedMinute = currentMinute;
+}
+
+// Skip current display item and force immediate transition
+void Clock::skipCurrentDisplay() {
+  lastChangeTime = millis() - (Timing::CLOCK_INTERVAL_SEC * 1000UL); // Force timeExpired in next loop check
+  
+  // Advance the index so we also skip the structurally paired 'displayTime' 
+  // that follows this skipped item, preventing Time being shown twice in a row.
+  currentDisplayIndex++;
+  if (currentDisplayIndex >= displaySequenceLength) {
+    currentDisplayIndex = 0;
+  }
 }
 
 // Finds next time index in display sequence

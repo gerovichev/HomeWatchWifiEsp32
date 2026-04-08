@@ -18,6 +18,7 @@ public:
   void detach();
   void loop();
   void checkMinuteChange(); // Public method to check for minute change
+  void skipCurrentDisplay(); // Skip current item in sequence
   Dht22_manager &getDht22();
   WeatherManager &getWeatherManager();
   CurrencyManager &getCurrencyManager();

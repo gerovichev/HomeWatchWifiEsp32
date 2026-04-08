@@ -3,6 +3,10 @@
 #include "logger.h"
 #include "secure_client.h"
 #include <WiFi.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+
+extern SemaphoreHandle_t dataMutex;
 
 CurrencyManager::CurrencyManager()
     : bearerTokenCurrency(confBearerTokenCurrency),
@@ -15,19 +19,25 @@ CurrencyManager::CurrencyManager()
 
 void CurrencyManager::initialize() {
   if (float tmpDataUSD = readCurrency(pathCurrencyUSD); tmpDataUSD > 0) {
+    if (dataMutex != NULL) xSemaphoreTake(dataMutex, portMAX_DELAY);
     dataUSDValue = tmpDataUSD;
+    if (dataMutex != NULL) xSemaphoreGive(dataMutex);
   }
 
   yield(); // Allow system tasks
 
   if (float tmpDataEUR = readCurrency(pathCurrencyEUR); tmpDataEUR > 0) {
+    if (dataMutex != NULL) xSemaphoreTake(dataMutex, portMAX_DELAY);
     dataEURValue = tmpDataEUR;
+    if (dataMutex != NULL) xSemaphoreGive(dataMutex);
   }
 
   yield();
 
   if (float tmpDataBTC = readCrypto(pathCryptoBTC); tmpDataBTC > 0) {
+    if (dataMutex != NULL) xSemaphoreTake(dataMutex, portMAX_DELAY);
     dataBTCValue = tmpDataBTC;
+    if (dataMutex != NULL) xSemaphoreGive(dataMutex);
   }
 }
 
