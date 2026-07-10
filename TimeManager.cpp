@@ -12,11 +12,13 @@ time_t timeNow;
 
 int offset;
 String city_name;
-int maxAttemptsTimes = Retry::MAX_ATTEMPTS_TIMEZONE;
+
 
 
 void getTimezone() {
   LOG_DEBUG_F("Checking timezone...");
+  LOG_VERBOSE("Zone end: " + String(zoneEnd) + ", Current time: " + String(timeNow));
+  int maxAttemptsTimes = Retry::MAX_ATTEMPTS_TIMEZONE;
   LOG_VERBOSE("Zone end: " + String(zoneEnd) + ", Current time: " + String(timeNow));
 
   if (zoneEnd > timeNow) {
@@ -74,7 +76,6 @@ void getTimezone() {
             LOG_DEBUG("GMT offset: " + String(offset) + " seconds");
 
             success = true;
-            maxAttemptsTimes = 1;
           }
         } else {
           LOG_ERROR("Timezone JSON deserialization failed: " + String(error.c_str()));
@@ -107,7 +108,12 @@ void printTimeToScreen() {
 
 void printDateToScreen() {
   time_t epochTime = timeClient.getEpochTime();
-  struct tm* ptm = gmtime((time_t*)&epochTime);
+  struct tm timeBuf;
+  struct tm* ptm = gmtime_r(&epochTime, &timeBuf);
+  if (ptm == nullptr) {
+    LOG_WARNING_F("Failed to get time for date display");
+    return;
+  }
   String tape = getNumberWithZerro(ptm->tm_mday) + F("/") + getNumberWithZerro(ptm->tm_mon + 1);
   drawString(tape);
 }

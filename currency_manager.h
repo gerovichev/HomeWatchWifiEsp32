@@ -12,7 +12,7 @@ public:
   void initialize();
   void displayUSDToScreen();
   void displayEURToScreen();
-  void displayETHToScreen(); // Future use
+
   void displayBTCToScreen();
 
 private:

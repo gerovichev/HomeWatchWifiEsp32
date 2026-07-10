@@ -18,7 +18,6 @@ WeatherManager::WeatherManager()
     temperature = 0;
     temp_max = 0;
     pressure = 0;
-    humidity = 0;
     description_weather = "";
 }
 
@@ -89,7 +88,6 @@ void WeatherManager::readWeather() {
           LOG_DEBUG("Description: " + description_weather);
 
           success = true;  // Set success flag
-          maxAttempts = 1;
         } else {
           LOG_ERROR("Weather JSON deserialization failed: " + String(error.c_str()));
         }

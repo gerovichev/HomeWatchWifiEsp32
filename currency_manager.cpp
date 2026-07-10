@@ -10,7 +10,7 @@ extern SemaphoreHandle_t dataMutex;
 
 CurrencyManager::CurrencyManager()
     : bearerTokenCurrency(confBearerTokenCurrency),
-      bearerTokenCrypto(confBearerTokenCrypto),
+      bearerTokenCrypto(confBearerTokenCurrency),
       pathCurrencyUSD(confPathCurrencyUSD),
       pathCurrencyEUR(confPathCurrencyEUR), pathCryptoBTC(confPathCryptoBTC),
       dataUSDValue(0.0), dataEURValue(0.0), dataBTCValue(0.0) {
@@ -168,7 +168,12 @@ float CurrencyManager::handleCryptoResponse(HTTPClient &http) {
     return 0.0;
   }
 
-  // CoinCap API v3 returns: {"timestamp":...,"data":["87214.89"]}
+  // Check for the "state" field first (new REST API style, Home Assistant sensor format)
+  if (doc.containsKey(F("state"))) {
+    return doc[F("state")].as<float>();
+  }
+
+  // Fallback / legacy support for CoinCap API v3 which returns: {"timestamp":...,"data":["87214.89"]}
   // Extract first element from data array
   if (doc.containsKey(F("data")) && doc[F("data")].is<JsonArray>()) {
     JsonArray dataArray = doc[F("data")].as<JsonArray>();

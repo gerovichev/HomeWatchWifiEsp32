@@ -30,18 +30,7 @@
 
 extern bool newMessageAvailable;
 
-// Class to manage LED buffer
-class LEDBuffer {
-public:
-  LEDBuffer(size_t size);
-  void clearBuffer();
-  char* getBuffer();
-  size_t getBufferSize() const;
 
-private:
-  std::vector<char> buffer;
-  size_t bufferSize;
-};
 
 // Function declarations
 void setIntensity(byte intensity);

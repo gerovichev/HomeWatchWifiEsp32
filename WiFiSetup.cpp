@@ -147,30 +147,33 @@ void WIFISetup::wifi_init() {
             LOG_DEBUG("  Channel: " + String(WiFi.channel()));
             return;
         } else {
-            LOG_WARNING_F("WiFi connection failed, but saved credentials exist");
-            LOG_INFO_F("Device will continue trying to reconnect in background");
-            LOG_INFO_F("AP mode will NOT be started - device will keep retrying saved WiFi");
-            printText(F("WiFi RETRY"));
-            
-            WiFi.setAutoReconnect(true);
-            WiFi.persistent(true);
-            return;
+            LOG_WARNING_F("WiFi connection failed with saved credentials after max attempts");
+            LOG_INFO_F("Starting AP mode for reconfiguration...");
+            printText(F("WIFI AP"));
         }
+    } else {
+        // No saved credentials - use WiFiManager for initial setup
+        LOG_INFO_F("No saved WiFi credentials found via esp_wifi/WiFi.SSID, starting configuration portal...");
     }
     
-    // No saved credentials - use WiFiManager for initial setup
-    LOG_INFO_F("No saved WiFi credentials found via esp_wifi/WiFi.SSID, starting configuration portal...");
     // Allow AP + STA for WiFiManager portal.
     WiFi.mode(WIFI_AP_STA);
     WiFiManager wifiManager;
 
     wifiManager.setConnectTimeout(180);
+    
+    // Callback to reboot upon save to prevent hanging when switching modes
+    wifiManager.setSaveConfigCallback([]() {
+        LOG_INFO_F("WiFi credentials saved. Restarting to apply...");
+        delay(1000);
+        ESP.restart();
+    });
+    
     wifiManager.setClass(F("invert"));
     LOG_DEBUG("Config portal SSID: " + String(wifi_name));
 
     LOG_INFO_F("Starting WiFi configuration portal (AP mode)...");
-    LOG_INFO_F("WiFiManager may still try previously saved AP before portal");
-    bool res = wifiManager.autoConnect(wifi_name, wifi_pass);
+    bool res = wifiManager.startConfigPortal(wifi_name, wifi_pass);
 
     if (!res) {
         LOG_ERROR_F("Failed to connect to WiFi or configuration timeout reached");

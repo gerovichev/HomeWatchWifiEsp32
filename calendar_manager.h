@@ -23,7 +23,7 @@ private:
     time_t nextEventEndTime;
     bool hasEvent;
     int lastUpdateDay;  // Last day when calendar was updated (1-31)
-    unsigned long lastDisplayTime;  // Last time event was displayed (millis)
+    mutable unsigned long lastDisplayTime;  // Last time event was displayed (millis)
     
     // Helper methods
     String formatEventTime(time_t eventTime) const;

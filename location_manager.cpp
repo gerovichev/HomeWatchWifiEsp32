@@ -13,7 +13,7 @@ String ip;
 float latitude = 31.66;
 float longitude = 34.56;
 Config config;
-int maxAttemptsLoc = Retry::MAX_ATTEMPTS_LOCATION;
+
 
 // Path for configuration file
 const char *filenamecnf = "/config.txt";
@@ -148,6 +148,7 @@ String getIp() {
   String path = "https://api.ipify.org";
   int attempts = 0;
   bool success = false;
+  int maxAttemptsLoc = Retry::MAX_ATTEMPTS_LOCATION;
 
   while (attempts < maxAttemptsLoc && !success) {
     if (http.begin(client, path)) {
@@ -159,7 +160,6 @@ String getIp() {
         payload = http.getString(); // Get the response payload
         LOG_INFO("External IP retrieved: " + payload);
         success = true;
-        maxAttemptsLoc = 1;
       } else {
         LOG_WARNING("IP retrieval HTTP error: " + String(httpCode));
       }

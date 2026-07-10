@@ -119,8 +119,10 @@ void dataUpdateTask(void *pvParameters) {
 
       LOG_DEBUG_F("Updating time from NTP...");
       timeClient.update(); // Update the time from NTP server
+      if (dataMutex != NULL) xSemaphoreTake(dataMutex, portMAX_DELAY);
       timeNow = timeClient.getEpochTime();
       setTime(timeNow);
+      if (dataMutex != NULL) xSemaphoreGive(dataMutex);
       LOG_VERBOSE("Current epoch time: " + String(timeNow));
 
       LOG_DEBUG_F("Updating timezone...");
@@ -143,7 +145,7 @@ void dataUpdateTask(void *pvParameters) {
       }
 
       LOG_DEBUG_F("Adjusting display intensity...");
-      setIntensityByTime(timeNow); // Adjust display intensity based on time
+      // Intensity adjustment moved to loop() for thread-safety
 
       LOG_INFO_F("Data update cycle completed successfully");
     } else {
@@ -175,6 +177,7 @@ void loop() {
   }
 
   if (displayAnimate()) {
+    setIntensityByTime(timeNow); // Safely adjust intensity on same core as display
     clock_loop();              // Handle clock logic
     realDisplayText();         // Update the display
   }
@@ -207,6 +210,7 @@ void enableWiFi() {
     if (++dotCount % 5 == 0) {
       LOG_VERBOSE_F("Still connecting...");
     }
+    delay(100);
     yield(); // Allow other tasks to run instead of blocking delay
   }
 

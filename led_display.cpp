@@ -16,17 +16,7 @@ bool newMessageAvailable = false;
 
 String lastDisplayedText = "";
 
-// LEDBuffer class implementation
-LEDBuffer::LEDBuffer(size_t size) : bufferSize(size) {
-  buffer.resize(bufferSize);
-  clearBuffer();
-}
-
-void LEDBuffer::clearBuffer() { std::fill(buffer.begin(), buffer.end(), '\0'); }
-
-char *LEDBuffer::getBuffer() { return buffer.data(); }
-
-size_t LEDBuffer::getBufferSize() const { return bufferSize; }
+static char currentDisplayBuffer[Buffer::LED_BUFFER_SIZE];
 
 // Sets the intensity of the display
 void setIntensity(byte intensity) { M.setIntensity(intensity); }
@@ -108,12 +98,15 @@ void realDisplayText() {
     LOG_INFO(">> Display: " + lastDisplayedText);
     M.displayClear();
 
+    strncpy(currentDisplayBuffer, lastDisplayedText.c_str(), sizeof(currentDisplayBuffer) - 1);
+    currentDisplayBuffer[sizeof(currentDisplayBuffer) - 1] = '\0';
+
     if (lastDisplayedText.length() > 5) {
-      M.displayText(lastDisplayedText.c_str(), PA_LEFT,
+      M.displayText(currentDisplayBuffer, PA_LEFT,
                     Display::SCROLL_SPEED_MS, Display::PAUSE_TIME_MS,
                     PA_SCROLL_LEFT, PA_NO_EFFECT);
     } else {
-      M.displayText(lastDisplayedText.c_str(), PA_CENTER,
+      M.displayText(currentDisplayBuffer, PA_CENTER,
                     Display::SCROLL_SPEED_MS, Display::PAUSE_TIME_MS, PA_PRINT,
                     PA_NO_EFFECT);
     }
@@ -128,12 +121,15 @@ void forceDisplayText() {
     LOG_INFO(">> Force Display: " + lastDisplayedText);
     M.displayClear();
 
+    strncpy(currentDisplayBuffer, lastDisplayedText.c_str(), sizeof(currentDisplayBuffer) - 1);
+    currentDisplayBuffer[sizeof(currentDisplayBuffer) - 1] = '\0';
+
     if (lastDisplayedText.length() > 5) {
-      M.displayText(lastDisplayedText.c_str(), PA_LEFT,
+      M.displayText(currentDisplayBuffer, PA_LEFT,
                     Display::SCROLL_SPEED_MS, Display::PAUSE_TIME_MS,
                     PA_SCROLL_LEFT, PA_NO_EFFECT);
     } else {
-      M.displayText(lastDisplayedText.c_str(), PA_CENTER,
+      M.displayText(currentDisplayBuffer, PA_CENTER,
                     Display::SCROLL_SPEED_MS, Display::PAUSE_TIME_MS, PA_PRINT,
                     PA_NO_EFFECT);
     }

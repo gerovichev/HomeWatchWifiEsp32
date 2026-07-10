@@ -4,10 +4,10 @@
 
 // Define the global variables
 String lang_weather;
-unsigned int sunrise;
-unsigned int sunset;
+time_t sunrise;
+time_t sunset;
 
-String version_prg = "260408";
+String version_prg = "260710";
 char grad = '\x60';
 
 float humidity_delta = 0.00;
@@ -93,8 +93,14 @@ void initPerDevice() {
 
 // Function to verify Wi-Fi connection
 void verifyWifi() {
+  unsigned long startAttempt = millis();
   while (WiFi.status() != WL_CONNECTED || WiFi.localIP() == IPAddress(0, 0, 0, 0)) {
+    if (millis() - startAttempt > 30000) {
+      LOG_ERROR_F("verifyWifi timeout after 30 seconds");
+      return;
+    }
     WiFi.reconnect();
+    delay(1000);
   }
 }
 
@@ -104,6 +110,6 @@ String getNumberWithZerro(int dig) {
 }
 
 // Wrapper function for drawing text on the display
-void drawString(String tape) {
+void drawString(const String& tape) {
   drawStringMax(tape);
 }

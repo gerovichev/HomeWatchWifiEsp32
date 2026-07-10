@@ -7,8 +7,8 @@
 
 // Configuration-related global variables
 extern String lang_weather;
-extern unsigned int sunrise;
-extern unsigned int sunset;
+extern time_t sunrise;
+extern time_t sunset;
 
 extern String version_prg;
 extern char grad;
@@ -28,5 +28,5 @@ extern boolean isReadWeather;
 void initPerDevice();
 void verifyWifi();
 String getNumberWithZerro(int dig);
-void drawString(String tape);
+void drawString(const String& tape);
 char getGradValue();

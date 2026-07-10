@@ -1,10 +1,6 @@
 #include "dht22_manager.h"
 #include "logger.h"
 
-// Define global variables
-float homeTemp = 0.0;
-float homeHumidity = 0.0;
-
 Dht22_manager::Dht22_manager() : DHT_Unified(DHTPIN, DHTTYPE){}
 
 // Function to initialize the DHT22 sensor and set home temperature

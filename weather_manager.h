@@ -18,11 +18,10 @@ public:
 
 private:
     // Member variables to store weather data
-    unsigned int temperature;
-    unsigned int temp_max;
-    unsigned int pressure;
-    unsigned int humidity;
-    unsigned int main_ext_humidity;
+    int temperature;
+    int temp_max;
+    int pressure;
+    int main_ext_humidity;
     String description_weather;
 };
 

@@ -18,9 +18,8 @@ public:
   float getHomeTemp();
 
 private:
-  // Global variables for home temperature and humidity
-  float homeTemp;
-  float homeHumidity;
+  float homeTemp = 0.0;
+  float homeHumidity = 0.0;
 
   // Function prototypes
 

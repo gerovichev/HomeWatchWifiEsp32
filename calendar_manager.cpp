@@ -55,7 +55,8 @@ void CalendarManager::findNextEvent() {
         return; // Time not synchronized
     }
     
-    struct tm* timeinfo = gmtime(&now);
+    struct tm timeinfoBuf;
+    struct tm* timeinfo = gmtime_r(&now, &timeinfoBuf);
     if (timeinfo == nullptr) {
         return;
     }
@@ -267,13 +268,14 @@ void CalendarManager::printNextEventToScreen() const {
         LOG_INFO(">> Display: Calendar = " + tape);
         drawString(tape);
         // Update last display time even for "No events"
-        const_cast<CalendarManager*>(this)->lastDisplayTime = millis();
+        lastDisplayTime = millis();
         return;
     }
     
     // Check if event is today - only show events on the day of the event
     time_t now = timeClient.getEpochTime();
-    struct tm* timeinfo = gmtime(&now);
+    struct tm timeinfoBuf;
+    struct tm* timeinfo = gmtime_r(&now, &timeinfoBuf);
     if (timeinfo == nullptr) {
         Clock::getInstance().skipCurrentDisplay();
         return;
@@ -283,7 +285,8 @@ void CalendarManager::printNextEventToScreen() const {
     int currentDay = timeinfo->tm_mday;
     
     // Get event date from stored start time
-    struct tm* eventTimeinfo = gmtime(&nextEventStartTime);
+    struct tm eventTimeinfoBuf;
+    struct tm* eventTimeinfo = gmtime_r(&nextEventStartTime, &eventTimeinfoBuf);
     if (eventTimeinfo == nullptr) {
         Clock::getInstance().skipCurrentDisplay();
         return;
@@ -344,12 +347,13 @@ void CalendarManager::printNextEventToScreen() const {
     drawString(tape);
     
     // Update last display time
-    const_cast<CalendarManager*>(this)->lastDisplayTime = millis();
+    lastDisplayTime = millis();
 }
 
 // Helper: Format event time as HH:MM
 String CalendarManager::formatEventTime(time_t eventTime) const {
-    struct tm* timeinfo = gmtime(&eventTime);
+    struct tm timeinfoBuf;
+    struct tm* timeinfo = gmtime_r(&eventTime, &timeinfoBuf);
     char timeStr[6];
     snprintf(timeStr, sizeof(timeStr), "%02d:%02d", timeinfo->tm_hour, timeinfo->tm_min);
     return String(timeStr);
@@ -357,8 +361,9 @@ String CalendarManager::formatEventTime(time_t eventTime) const {
 
 // Helper: Format event time range as "HH:MM-HH:MM"
 String CalendarManager::formatEventTimeRange(time_t startTime, time_t endTime) const {
-    struct tm* startInfo = gmtime(&startTime);
-    struct tm* endInfo = gmtime(&endTime);
+    struct tm startInfoBuf, endInfoBuf;
+    struct tm* startInfo = gmtime_r(&startTime, &startInfoBuf);
+    struct tm* endInfo = gmtime_r(&endTime, &endInfoBuf);
     char timeStr[12];
     snprintf(timeStr, sizeof(timeStr), "%02d:%02d-%02d:%02d", 
              startInfo->tm_hour, startInfo->tm_min,
@@ -388,7 +393,8 @@ bool CalendarManager::shouldUpdateToday() const {
         return true; // Update when time becomes available
     }
     
-    struct tm* timeinfo = gmtime(&now);
+    struct tm timeinfoBuf;
+    struct tm* timeinfo = gmtime_r(&now, &timeinfoBuf);
     if (timeinfo == nullptr) {
         LOG_WARNING_F("Failed to get time info, will retry calendar update");
         return true;
@@ -408,7 +414,8 @@ void CalendarManager::markUpdated() {
         return;
     }
     
-    struct tm* timeinfo = gmtime(&now);
+    struct tm timeinfoBuf;
+    struct tm* timeinfo = gmtime_r(&now, &timeinfoBuf);
     if (timeinfo != nullptr) {
         lastUpdateDay = timeinfo->tm_mday;
         LOG_INFO("Calendar marked as updated for day " + String(lastUpdateDay));
