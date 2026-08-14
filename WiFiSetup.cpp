@@ -14,19 +14,26 @@ bool WIFISetup::hasSavedCredentials() {
     // Try to read saved SSID - this works even when not connected
     String savedSSID = WiFi.SSID();
     bool hasCredentials = (savedSSID.length() > 0);
-    
+
     if (!hasCredentials) {
+        // WiFi.SSID() is empty before the first association, so fall back to
+        // the NVS-backed config - and take the SSID from there too, otherwise
+        // the log below reports "Found" next to a blank name.
         wifi_config_t config;
         if (esp_wifi_get_config(WIFI_IF_STA, &config) == ESP_OK) {
-            hasCredentials = (strlen(reinterpret_cast<const char*>(config.sta.ssid)) > 0);
+            const char* nvsSSID = reinterpret_cast<const char*>(config.sta.ssid);
+            hasCredentials = (strlen(nvsSSID) > 0);
+            if (hasCredentials) {
+                savedSSID = String(nvsSSID);
+            }
         }
     }
-    
+
     LOG_DEBUG("Saved credentials check: " + String(hasCredentials ? "Found" : "Not found"));
     if (hasCredentials) {
         LOG_DEBUG("Saved SSID: " + savedSSID);
     }
-    
+
     return hasCredentials;
 }
 
@@ -68,6 +75,20 @@ bool WIFISetup::attemptDirectConnection(int maxAttempts) {
 
 namespace {
 bool wifi_events_registered = false;
+
+// Shared by both success paths (saved credentials and portal) so the two
+// reports cannot drift apart.
+void logConnectionDetails() {
+    LOG_INFO("✓ WiFi connected successfully!");
+    LOG_INFO("  SSID: " + WiFi.SSID());
+    LOG_INFO("  IP: " + WiFi.localIP().toString());
+    LOG_INFO("  Gateway: " + WiFi.gatewayIP().toString());
+    LOG_DEBUG("  Subnet: " + WiFi.subnetMask().toString());
+    LOG_DEBUG("  DNS: " + WiFi.dnsIP().toString());
+    LOG_DEBUG("  MAC: " + WiFi.macAddress());
+    LOG_DEBUG("  RSSI: " + String(WiFi.RSSI()) + " dBm");
+    LOG_DEBUG("  Channel: " + String(WiFi.channel()));
+}
 
 void registerWiFiEvents() {
     if (wifi_events_registered) {
@@ -132,19 +153,10 @@ void WIFISetup::wifi_init() {
             WiFi.setAutoReconnect(true);
             WiFi.persistent(true);
             
-            String connectedSSID = WiFi.SSID();
-            printText(connectedSSID);
+            printText(WiFi.SSID());
             delay(2000);
-            
-            LOG_INFO("✓ WiFi connected successfully!");
-            LOG_INFO("  SSID: " + connectedSSID);
-            LOG_INFO("  IP: " + WiFi.localIP().toString());
-            LOG_INFO("  Gateway: " + WiFi.gatewayIP().toString());
-            LOG_DEBUG("  Subnet: " + WiFi.subnetMask().toString());
-            LOG_DEBUG("  DNS: " + WiFi.dnsIP().toString());
-            LOG_DEBUG("  MAC: " + WiFi.macAddress());
-            LOG_DEBUG("  RSSI: " + String(WiFi.RSSI()) + " dBm");
-            LOG_DEBUG("  Channel: " + String(WiFi.channel()));
+
+            logConnectionDetails();
             return;
         } else {
             LOG_WARNING_F("WiFi connection failed with saved credentials after max attempts");
@@ -161,7 +173,14 @@ void WIFISetup::wifi_init() {
     WiFiManager wifiManager;
 
     wifiManager.setConnectTimeout(180);
-    
+
+    // Without this the portal blocks forever when nobody connects, leaving the
+    // device stuck in AP mode with a frozen display until it is power-cycled.
+    // On timeout we fall through and carry on with whatever connectivity we
+    // have, retrying via attemptReconnect() from loop().
+    wifiManager.setConfigPortalTimeout(NetworkConfig::CONFIG_PORTAL_TIMEOUT_SEC);
+
+
     // Callback to reboot upon save to prevent hanging when switching modes
     wifiManager.setSaveConfigCallback([]() {
         LOG_INFO_F("WiFi credentials saved. Restarting to apply...");
@@ -185,55 +204,16 @@ void WIFISetup::wifi_init() {
         WiFi.setAutoReconnect(true);
         WiFi.persistent(true);
 
-        String connectedSSID = WiFi.SSID();
-        printText(connectedSSID);
+        printText(WiFi.SSID());
         delay(2000);
 
-        LOG_INFO("✓ WiFi connected successfully!");
-        LOG_INFO("  SSID: " + connectedSSID);
-        LOG_INFO("  IP: " + WiFi.localIP().toString());
-        LOG_INFO("  Gateway: " + WiFi.gatewayIP().toString());
-        LOG_DEBUG("  Subnet: " + WiFi.subnetMask().toString());
-        LOG_DEBUG("  DNS: " + WiFi.dnsIP().toString());
-        LOG_DEBUG("  MAC: " + WiFi.macAddress());
-        LOG_DEBUG("  RSSI: " + String(WiFi.RSSI()) + " dBm");
-        LOG_DEBUG("  Channel: " + String(WiFi.channel()));
+        logConnectionDetails();
     }
-}
-
-// Function to reset saved WiFi credentials
-void WIFISetup::wifi_reset() {
-    LOG_WARNING_F("Resetting WiFi credentials...");
-    LOG_WARNING("Current SSID: " + WiFi.SSID() + " will be forgotten");
-    
-    WiFiManager wifiManager;
-
-    wifiManager.resetSettings();
-    LOG_INFO_F("WiFi credentials reset successfully");
-    LOG_INFO_F("Device will need to be reconfigured on next boot");
 }
 
 // Check if WiFi is connected
 bool WIFISetup::isConnected() {
     return WiFi.status() == WL_CONNECTED;
-}
-
-// Get WiFi status as a readable string
-String WIFISetup::getStatusString() {
-    switch (WiFi.status()) {
-        case WL_CONNECTED:
-            return "Connected";
-        case WL_NO_SSID_AVAIL:
-            return "SSID not available";
-        case WL_CONNECT_FAILED:
-            return "Connection failed";
-        case WL_IDLE_STATUS:
-            return "Idle";
-        case WL_DISCONNECTED:
-            return "Disconnected";
-        default:
-            return "Unknown (" + String(WiFi.status()) + ")";
-    }
 }
 
 // Attempt to reconnect to saved WiFi

@@ -29,10 +29,6 @@ private:
   float dataEURValue;
   float dataBTCValue;
 
-  bool setupHttpClient(HTTPClient &http, WiFiClientSecure &client,
-                       const char *path, const char *token);
-  float handleHttpResponse(HTTPClient &http);
-  float handleCryptoResponse(HTTPClient &http);
   float readCurrency(const char *path);
   float readCrypto(const char *path);
 };

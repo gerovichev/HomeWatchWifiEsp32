@@ -35,7 +35,9 @@ extern bool newMessageAvailable;
 // Function declarations
 void setIntensity(byte intensity);
 String formatTime(time_t rawTime);
-void setIntensityByTime(time_t timeNow);
+// Callers must pass values snapshotted under dataMutex - sunrise/sunset and the
+// current time are written by dataUpdateTask on the other core.
+void setIntensityByTime(time_t nowEpoch, time_t sunriseEpoch, time_t sunsetEpoch);
 String utf2rus(const String& source);
 void drawStringMax(const String& tape);
 void realDisplayText();

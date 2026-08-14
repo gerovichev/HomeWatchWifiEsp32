@@ -2,6 +2,8 @@
 #define LOGGER_H
 
 #include <Arduino.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
 // Log levels
 enum LogLevel {
@@ -34,15 +36,20 @@ public:
     void verbose(const __FlashStringHelper* message);
 
 private:
-    Logger() : logLevel(LOG_LEVEL_INFO), isInitialized(false) {}
+    Logger() : logLevel(LOG_LEVEL_INFO), isInitialized(false), serialMutex(nullptr) {}
     Logger(const Logger&) = delete;
     Logger& operator=(const Logger&) = delete;
-    
+
     void log(LogLevel level, const String& message);
+    void logFlash(LogLevel level, const __FlashStringHelper* message);
     const char* getLevelString(LogLevel level);
-    
+
     LogLevel logLevel;
     bool isInitialized;
+
+    // Serialises Serial writes: loop() on core 1 and dataUpdateTask on core 0
+    // both log, and without this their output interleaves mid-line.
+    SemaphoreHandle_t serialMutex;
 };
 
 // Convenience macros for logging

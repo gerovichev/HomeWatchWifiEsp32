@@ -2,6 +2,11 @@
 #include "secure_client.h"
 #include "constants.h"
 #include "logger.h"
+#include "error_handler.h"
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+
+extern SemaphoreHandle_t dataMutex;
 
 WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP);
@@ -19,7 +24,6 @@ void getTimezone() {
   LOG_DEBUG_F("Checking timezone...");
   LOG_VERBOSE("Zone end: " + String(zoneEnd) + ", Current time: " + String(timeNow));
   int maxAttemptsTimes = Retry::MAX_ATTEMPTS_TIMEZONE;
-  LOG_VERBOSE("Zone end: " + String(zoneEnd) + ", Current time: " + String(timeNow));
 
   if (zoneEnd > timeNow) {
     time_t untilTimeMove = zoneEnd - timeNow;
@@ -31,22 +35,27 @@ void getTimezone() {
 
   LOG_INFO_F("Fetching timezone information...");
   
-  WiFiClientSecure client;
-  setupSecureClient(client, "timezonedb.com");
-  HTTPClient http;
-
   // Optimize URL construction to avoid multiple String concatenations
   char path[Buffer::PATH_BUFFER_SIZE];
   snprintf(path, sizeof(path),
            "https://api.timezonedb.com/v2.1/get-time-zone?key=%s&format=json&lat=%.2f&lng=%.2f&by=position",
            apiKeyTimezone, latitude, longitude);
-  
-  LOG_DEBUG("Timezone API URL: " + String(path));
+
+  // Deliberately logs coordinates only - the full URL carries apiKeyTimezone.
+  LOG_DEBUG("Timezone API request for lat=" + String(latitude, 2) +
+            ", lon=" + String(longitude, 2));
 
   int attempts = 0;
   bool success = false;
 
   while (attempts < maxAttemptsTimes && !success) {
+    // A fresh client per attempt: mbedTLS state is not reusable after a failed
+    // handshake, so retrying on the same WiFiClientSecure just fails again.
+    WiFiClientSecure client;
+    setupSecureClient(client, "timezonedb.com");
+    HTTPClient http;
+    http.setTimeout(Timing::HTTP_TIMEOUT_MS);
+
     if (http.begin(client, path)) {
       LOG_DEBUG("Timezone API attempt " + String(attempts + 1) + "/" + String(maxAttemptsTimes));
       int httpCode = http.GET();  // Send the request
@@ -55,27 +64,37 @@ void getTimezone() {
         String payload = http.getString();
         LOG_VERBOSE("Timezone API response: " + payload);
 
-        StaticJsonDocument<Buffer::JSON_TIMEZONE_SIZE> doc;  // Timezone API response: status, offset, zoneStart, zoneEnd, cityName
+        JsonDocument doc;  // Timezone API response: status, offset, zoneStart, zoneEnd, cityName
         DeserializationError error = deserializeJson(doc, payload);
         if (!error) {
           LOG_VERBOSE_F("Timezone JSON deserialization succeeded");
           JsonObject root = doc.as<JsonObject>();
 
-          const char* status = root["status"];
+          // `| ""` matters: an error envelope with no "status" key yields a
+          // null const char*, and strcmp() on that faults.
+          const char* status = root["status"] | "";
           if (strcmp(status, "OK") == 0) {
-            offset = (int)root["gmtOffset"];
-            timeClient.setTimeOffset(offset);
+            const int newOffset = root["gmtOffset"] | 0;
+            const time_t newZoneStart = static_cast<time_t>(root["zoneStart"] | 0L);
+            const time_t newZoneEnd = static_cast<time_t>(root["zoneEnd"] | 0L);
+            String newCityName = String(root["cityName"] | "");
 
-            zoneStart = (unsigned long)root["zoneStart"];
-            zoneEnd = (unsigned long)root["zoneEnd"];
+            // printTimeToScreen() reads timeClient from the display core, so
+            // the offset change and its bookkeeping go in one critical section.
+            if (dataMutex != NULL) xSemaphoreTake(dataMutex, portMAX_DELAY);
+            offset = newOffset;
+            timeClient.setTimeOffset(newOffset);
+            zoneStart = newZoneStart;
+            zoneEnd = newZoneEnd;
+            city_name = newCityName;
+            if (dataMutex != NULL) xSemaphoreGive(dataMutex);
 
-            const char* name_ct = root["cityName"];
-            city_name = String(name_ct);
-
-            LOG_INFO("Timezone updated: " + city_name + " (UTC" + String(offset >= 0 ? "+" : "") + String(offset/3600) + ")");
-            LOG_DEBUG("GMT offset: " + String(offset) + " seconds");
+            LOG_INFO("Timezone updated: " + newCityName + " (UTC" + String(newOffset >= 0 ? "+" : "") + String(newOffset/3600) + ")");
+            LOG_DEBUG("GMT offset: " + String(newOffset) + " seconds");
 
             success = true;
+          } else {
+            LOG_WARNING("Timezone API returned status: " + String(status));
           }
         } else {
           LOG_ERROR("Timezone JSON deserialization failed: " + String(error.c_str()));
@@ -95,7 +114,10 @@ void getTimezone() {
         LOG_WARNING("Retrying timezone request (" + String(attempts) + "/" + String(maxAttemptsTimes) + ")...");
         delay(Timing::RETRY_DELAY_MS);
       } else {
-        LOG_ERROR("Failed to get timezone data after " + String(maxAttemptsTimes) + " attempts");    
+        ErrorHandler::handleError(ErrorHandler::ERROR_API,
+                                  "Timezone fetch failed after " + String(maxAttemptsTimes) +
+                                      " attempts, keeping current offset",
+                                  attempts, maxAttemptsTimes);
       }
     }
   }

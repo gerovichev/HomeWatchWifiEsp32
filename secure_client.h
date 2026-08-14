@@ -2,27 +2,20 @@
 
 #include <WiFiClientSecure.h>
 #include "logger.h"
+#include "root_certs.h"
 
 /**
- * Setup secure SSL client
- * Attempts to use certificate validation if possible
- * Otherwise uses setInsecure with warning
+ * Setup secure SSL client with certificate validation.
+ * Requires the system clock to already be synced (see setClock() in
+ * location_manager.cpp) - mbedTLS rejects certificates as "not yet valid"
+ * if the ESP32's clock is still at its power-on epoch.
  */
 inline void setupSecureClient(WiFiClientSecure& client, const char* domain = nullptr) {
-    // For ESP32 certificate validation requires additional setup
-    // In production it's recommended to use root certificates
-    // For now using setInsecure with warning for compatibility
-    
-    // TODO: Add support for root certificates for main domains
-    // X509List cert(certificate);
-    // client.setCACert(cert);
-    
-    client.setInsecure();
-    
+    client.setCACert(ROOT_CA_BUNDLE);
+
     if (domain) {
-        LOG_WARNING("Using insecure SSL connection for: " + String(domain) + 
-                   " (consider adding certificate validation)");
+        LOG_DEBUG("Secure client configured with CA validation for: " + String(domain));
     } else {
-        LOG_DEBUG_F("Secure client configured (insecure mode)");
+        LOG_DEBUG_F("Secure client configured with CA validation");
     }
 }

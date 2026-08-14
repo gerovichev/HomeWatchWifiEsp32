@@ -1,4 +1,5 @@
 #include "global_config.h"
+#include "constants.h"
 #include <WiFi.h>
 #include <esp_mac.h>
 
@@ -47,8 +48,9 @@ void initPerDevice() {
   macAddrSt = macAddr;
 
   // If the device MAC is found in the configuration map, apply the settings
-  if (configMap.find(macAddr) != configMap.end()) {
-    DeviceConfig& config = configMap[macAddr];
+  auto entry = configMap.find(macAddr);
+  if (entry != configMap.end()) {
+    const DeviceConfig& config = entry->second;
 
     lang_weather = config.lang_weather;
     hostname_m = config.hostname_m;
@@ -60,48 +62,41 @@ void initPerDevice() {
     isOTAreq = config.isOTAreq;
     isMQTT = config.isMQTT;
     setIntensity(config.intensity);  // Set LED intensity based on the config
-    mqtt_topic_str = hostname_m + String(mqtt_topic);
-    
+
     LOG_INFO("Device configured: " + hostname_m);
     LOG_DEBUG("Language: " + lang_weather);
     LOG_DEBUG("DHT22: " + String(IS_DHT_CONNECTED ? "connected" : "disconnected"));
     LOG_DEBUG("MQTT: " + String(isMQTT ? "enabled" : "disabled"));
 
   } else {
-    // Set default values if MAC address is not found in the config map
+    // Unknown board: set *every* field explicitly rather than leaving some at
+    // their file-scope initialisers. In particular isOTAreq must default off -
+    // an unidentified device should not pull firmware from the update server.
     lang_weather = "en";
     hostname_m = "ESP_Unknown";
     IS_DHT_CONNECTED = false;
     isWebClientNeeded = true;
     isReadWeather = true;
+    humidity_delta = Sensor::HUMIDITY_DELTA_DEFAULT;
     nameofWatch = "New";
-    
-    LOG_WARNING("MAC address not found in config, using defaults");
+    isOTAreq = false;
+    isMQTT = false;
+    setIntensity(Display::INTENSITY_NIGHT);
+
+    LOG_WARNING("MAC address not found in config, using defaults (OTA and MQTT disabled)");
   }
+
+  // Derived from hostname_m, so it has to be built on both paths.
+  mqtt_topic_str = hostname_m + String(mqtt_topic);
 
   LOG_INFO("Hostname: " + hostname_m);
 
-  // Set days of the week based on language
-  if (!lang_weather.compareTo("ru")) {
-    String daysOfTheWeekT[7] = { "Вс.", "Пн.", "Вт.", "Ср.", "Чт.", "Пт.", "Сб." };
-    for (int i = 0; i < 7; i++) daysOfTheWeek[i] = daysOfTheWeekT[i];
-  } else {
-    String daysOfTheWeekT[7] = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
-    for (int i = 0; i < 7; i++) daysOfTheWeek[i] = daysOfTheWeekT[i];
-  }
-}
-
-// Function to verify Wi-Fi connection
-void verifyWifi() {
-  unsigned long startAttempt = millis();
-  while (WiFi.status() != WL_CONNECTED || WiFi.localIP() == IPAddress(0, 0, 0, 0)) {
-    if (millis() - startAttempt > 30000) {
-      LOG_ERROR_F("verifyWifi timeout after 30 seconds");
-      return;
-    }
-    WiFi.reconnect();
-    delay(1000);
-  }
+  // Set days of the week based on language. The tables are static const so the
+  // literals stay in flash instead of building 7 temporary Strings per branch.
+  static const char* const daysRu[7] = { "Вс.", "Пн.", "Вт.", "Ср.", "Чт.", "Пт.", "Сб." };
+  static const char* const daysEn[7] = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
+  const char* const* days = (lang_weather == "ru") ? daysRu : daysEn;
+  for (int i = 0; i < 7; i++) daysOfTheWeek[i] = days[i];
 }
 
 // Function to get a two-digit number as a string (with leading zero if necessary)

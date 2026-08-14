@@ -9,6 +9,9 @@ Logger& Logger::getInstance() {
 void Logger::begin(unsigned long baudRate) {
     if (!isInitialized) {
         Serial.begin(baudRate);
+        // Created before isInitialized flips, so no log() call can observe an
+        // initialised logger with a null mutex.
+        serialMutex = xSemaphoreCreateMutex();
         isInitialized = true;
         delay(Timing::SERIAL_INIT_DELAY_MS); // Give time for Serial to initialize
     }
@@ -39,15 +42,25 @@ void Logger::log(LogLevel level, const String& message) {
     }
     
     // Print timestamp (milliseconds since start)
-    unsigned long timestamp = millis();
     char timeStr[12];
-    sprintf(timeStr, "%10lu", timestamp);
-    
+    snprintf(timeStr, sizeof(timeStr), "%10lu", millis());
+
+    // Hold the mutex across the whole record so a line from the other core
+    // cannot be spliced into the middle of this one. A bounded wait keeps a
+    // logging problem from ever deadlocking the caller.
+    const bool locked =
+        (serialMutex != nullptr) &&
+        (xSemaphoreTake(serialMutex, pdMS_TO_TICKS(50)) == pdTRUE);
+
     Serial.print(timeStr);
     Serial.print(" ");
     Serial.print(getLevelString(level));
     Serial.print(" ");
     Serial.println(message);
+
+    if (locked) {
+        xSemaphoreGive(serialMutex);
+    }
 }
 
 void Logger::error(const String& message) {
@@ -70,22 +83,31 @@ void Logger::verbose(const String& message) {
     log(LOG_LEVEL_VERBOSE, message);
 }
 
+// Filters by level before touching the flash string, so a call below the
+// current log level never pays for the String(message) heap allocation.
+void Logger::logFlash(LogLevel level, const __FlashStringHelper* message) {
+    if (!isInitialized || !Serial || level > logLevel) {
+        return;
+    }
+    log(level, String(message));
+}
+
 void Logger::error(const __FlashStringHelper* message) {
-    error(String(message));
+    logFlash(LOG_LEVEL_ERROR, message);
 }
 
 void Logger::warning(const __FlashStringHelper* message) {
-    warning(String(message));
+    logFlash(LOG_LEVEL_WARNING, message);
 }
 
 void Logger::info(const __FlashStringHelper* message) {
-    info(String(message));
+    logFlash(LOG_LEVEL_INFO, message);
 }
 
 void Logger::debug(const __FlashStringHelper* message) {
-    debug(String(message));
+    logFlash(LOG_LEVEL_DEBUG, message);
 }
 
 void Logger::verbose(const __FlashStringHelper* message) {
-    verbose(String(message));
+    logFlash(LOG_LEVEL_VERBOSE, message);
 }

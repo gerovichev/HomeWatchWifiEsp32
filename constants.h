@@ -1,5 +1,7 @@
 #pragma once
 
+#include <time.h>  // time_t, used by MIN_VALID_EPOCH
+
 // Timing constants
 namespace Timing {
     constexpr int CLOCK_INTERVAL_SEC = 6;
@@ -12,10 +14,16 @@ namespace Timing {
     constexpr int MQTT_RECONNECT_DELAY_MS = 5000;
     constexpr int NTP_SYNC_WAIT_MS = 500;
     constexpr int SERIAL_INIT_DELAY_MS = 500;
+    constexpr unsigned long WIFI_CHECK_INTERVAL_MS = 60000;  // How often loop() polls WiFi state
+
+    // Earliest epoch we accept as "clock is synced". Anything below this means
+    // NTP has not landed yet and time-derived logic must not run.
+    constexpr time_t MIN_VALID_EPOCH = 946684800;  // 2000-01-01T00:00:00Z
 }
 
 // Retry constants
 namespace Retry {
+    // Sensor/network retry ceilings consumed by ErrorHandler::shouldRetry
     constexpr int MAX_ATTEMPTS_WEATHER = 3;
     constexpr int MAX_ATTEMPTS_LOCATION = 3;
     constexpr int MAX_ATTEMPTS_TIMEZONE = 3;
@@ -30,6 +38,11 @@ namespace Display {
     constexpr int DISPLAY_CYCLE_LENGTH = 21;
     constexpr int INTENSITY_DAY = 2;
     constexpr int INTENSITY_NIGHT = 0;
+
+    // Capacity of Clock::displaySequence. Headroom above the 26 entries the
+    // fully-featured build currently emits, so adding a screen does not
+    // silently overrun the array (buildDisplaySequence() also bounds-checks).
+    constexpr int MAX_SEQUENCE_LENGTH = 40;
 }
 
 // Buffer sizes
@@ -57,5 +70,15 @@ namespace NetworkConfig {
     constexpr int WIFI_INIT_RETRY_ATTEMPTS = 5;  // Количество попыток подключения при старте
     constexpr unsigned long WIFI_INIT_RETRY_DELAY_MS = 5000;  // Задержка между попытками (5 секунд)
     constexpr unsigned long WIFI_INIT_SINGLE_ATTEMPT_TIMEOUT_MS = 15000;  // Таймаут одной попытки (15 секунд)
+
+    // The config portal must not block forever: a device that lost its
+    // credentials has to fall back to normal operation (and keep its display
+    // alive) instead of sitting in AP mode until someone power-cycles it.
+    constexpr int CONFIG_PORTAL_TIMEOUT_SEC = 300;
+
+    // PubSubClient only services the socket once per data-update cycle, so the
+    // keepalive has to outlast that interval or the broker drops us every time.
+    constexpr uint16_t MQTT_KEEPALIVE_SEC = 2 * Timing::DATA_UPDATE_INTERVAL_SEC;
+    constexpr uint16_t MQTT_SOCKET_TIMEOUT_SEC = 15;
 }
 

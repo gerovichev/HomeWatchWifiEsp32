@@ -4,8 +4,8 @@
 
 // Structure to store configuration
 struct Config {
-  float latitude;
-  float longitude;
+  float latitude = 0.0f;
+  float longitude = 0.0f;
   String ip;
 };
 
@@ -19,6 +19,9 @@ extern Config config;
 void loadConfiguration();
 void saveConfiguration();
 void setClock();
-void getLocationAPI(String ip);
+// Returns true only if it actually refreshed `config` - callers must not
+// persist the config when this reports failure.
+bool getLocationAPI(const String &ip);
+// Returns the external IP, or an empty String if it could not be determined.
 String getIp();
 void location_init();

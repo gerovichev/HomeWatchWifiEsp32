@@ -11,7 +11,7 @@ public:
     // Methods to interact with weather data
     void readWeather();                       // Reads weather data (replace with real data fetch)
     void printWeatherToScreen() const;        // Prints all weather data
-    void printMaxTempToScreen() const;        // Prints max temperature
+    void printFeelsLikeToScreen() const;      // Prints apparent ("feels like") temperature
     void printPressureToScreen() const;       // Prints pressure
     void printHumidityToScreen() const;       // Prints humidity
     void printDescriptionWeatherToScreen() const; // Prints weather description
@@ -19,7 +19,7 @@ public:
 private:
     // Member variables to store weather data
     int temperature;
-    int temp_max;
+    int feelsLikeTemp;  // OpenWeatherMap "feels_like", not a daily maximum
     int pressure;
     int main_ext_humidity;
     String description_weather;

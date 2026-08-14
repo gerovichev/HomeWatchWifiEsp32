@@ -10,7 +10,10 @@ SemaphoreHandle_t dataMutex = NULL;
 
 // WiFi reconnection tracking
 static unsigned long lastWiFiCheck = 0;
-constexpr unsigned long WIFI_CHECK_INTERVAL_MS = 60000;  // Check WiFi every 60 seconds
+
+// TLS handshakes plus JSON parsing run on this task's stack; keep headroom so a
+// slightly larger API response cannot overflow it.
+constexpr uint32_t DATA_TASK_STACK_BYTES = 12288;
 
 // Setup function, called once at startup
 void setup() {
@@ -41,6 +44,11 @@ void setup() {
   displayTextInSetup(WiFi.localIP().toString());
 
   LOG_INFO("IP Address: " + WiFi.localIP().toString());
+
+  // Sync system clock via NTP before any TLS handshake - mbedTLS validates
+  // certificate notBefore/notAfter dates against it, and rejects otherwise
+  // valid certs if the clock is still at its power-on epoch.
+  setClock();
 
   LOG_INFO_F("Initializing location services...");
   location_init();
@@ -76,7 +84,7 @@ void setup() {
     xTaskCreatePinnedToCore(
       dataUpdateTask,
       "DataUpdate",
-      8192,
+      DATA_TASK_STACK_BYTES,
       NULL,
       1,
       NULL,
@@ -144,10 +152,12 @@ void dataUpdateTask(void *pvParameters) {
         calendarManager.readCalendarEvents(); // Update calendar events
       }
 
-      LOG_DEBUG_F("Adjusting display intensity...");
-      // Intensity adjustment moved to loop() for thread-safety
+      // Display intensity is applied by loop() on the display core - see
+      // setIntensityByTime() there.
 
       LOG_INFO_F("Data update cycle completed successfully");
+      LOG_DEBUG("DataUpdate stack headroom: " +
+                String(uxTaskGetStackHighWaterMark(NULL)) + " bytes");
     } else {
       LOG_ERROR_F("WiFi not connected, skipping data update");
     }
@@ -166,9 +176,9 @@ void loop() {
 
   // Periodically check WiFi connection and attempt reconnection if needed
   unsigned long currentTime = millis();
-  if (currentTime - lastWiFiCheck > WIFI_CHECK_INTERVAL_MS) {
+  if (currentTime - lastWiFiCheck > Timing::WIFI_CHECK_INTERVAL_MS) {
     lastWiFiCheck = currentTime;
-    
+
     if (WiFi.status() != WL_CONNECTED) {
       LOG_DEBUG_F("WiFi disconnected, attempting to reconnect...");
       WIFISetup wifiSetup;
@@ -177,7 +187,21 @@ void loop() {
   }
 
   if (displayAnimate()) {
-    setIntensityByTime(timeNow); // Safely adjust intensity on same core as display
+    // timeNow/sunrise/sunset are 64-bit and written by dataUpdateTask on core 0,
+    // so a bare read here can tear or catch sunrise mid-timezone-adjustment.
+    // Snapshot them under the mutex, then work from the local copies.
+    time_t nowSnapshot = timeNow;
+    time_t sunriseSnapshot = sunrise;
+    time_t sunsetSnapshot = sunset;
+    if (dataMutex != NULL &&
+        xSemaphoreTake(dataMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+      nowSnapshot = timeNow;
+      sunriseSnapshot = sunrise;
+      sunsetSnapshot = sunset;
+      xSemaphoreGive(dataMutex);
+    }
+    setIntensityByTime(nowSnapshot, sunriseSnapshot, sunsetSnapshot);
+
     clock_loop();              // Handle clock logic
     realDisplayText();         // Update the display
   }
@@ -185,42 +209,3 @@ void loop() {
   delay(1); // Yield to WiFi/FreeRTOS
 }
 
-// Function to enable Wi-Fi (if disabled)
-void enableWiFi() {
-  // Check if already connected
-  if (WiFi.status() == WL_CONNECTED) {
-    LOG_DEBUG_F("WiFi already connected");
-    return;
-  }
-
-  WiFi.begin(); // Reconnect using saved credentials
-  LOG_INFO_F("Reconnecting to WiFi...");
-
-  unsigned long startAttemptTime = millis();
-  int dotCount = 0;
-
-  while (WiFi.status() != WL_CONNECTED) {
-    // Check for timeout
-    if (millis() - startAttemptTime > Timing::WIFI_TIMEOUT_MS) {
-      LOG_ERROR_F("WiFi connection timeout");
-      return;
-    }
-
-    // Visual feedback every 500ms
-    if (++dotCount % 5 == 0) {
-      LOG_VERBOSE_F("Still connecting...");
-    }
-    delay(100);
-    yield(); // Allow other tasks to run instead of blocking delay
-  }
-
-  // Connection successful
-  LOG_INFO("WiFi reconnected! IP: " + WiFi.localIP().toString());
-}
-
-// Function to disable Wi-Fi
-void disableWiFi() {
-  WiFi.disconnect(true, false);
-  WiFi.mode(WIFI_OFF);
-  LOG_INFO_F("WiFi disabled to save power");
-}

@@ -6,6 +6,7 @@
 #include "Secret.h"
 #include "weather_manager.h"
 #include "calendar_manager.h"
+#include "constants.h"
 #include <Ticker.h>
 
 // TIMER_INTERVAL_MS and DISPLAY_CYCLE_LENGTH moved to constants.h
@@ -15,7 +16,6 @@ public:
   static Clock &getInstance(); // Singleton access to instance
 
   void init();
-  void detach();
   void loop();
   void checkMinuteChange(); // Public method to check for minute change
   void skipCurrentDisplay(); // Skip current item in sequence
@@ -37,6 +37,14 @@ private:
   void buildDisplaySequence();
   int findNextTimeIndex();
 
+  // Array of function pointers for display
+  typedef void (Clock::*DisplayAction)();
+
+  // Appends one screen, refusing to write past the end of displaySequence.
+  void addDisplayAction(DisplayAction action);
+  // Appends the paired "time, then <screen>" the rotation is built from.
+  void addTimedDisplayAction(DisplayAction action);
+
   // Wrapper methods for display
   void displayTime();
   void displayDate();
@@ -56,19 +64,15 @@ private:
   int currentDisplayIndex = 0;
   int lastDisplayedMinute = -1;     // Track last displayed minute
   unsigned long lastChangeTime = 0; // Track when last display change happened
-  bool isTransitioning = false;     // Track if we are in transition
 
   WeatherManager weatherManager;
   CurrencyManager currencyManager;
   CalendarManager calendarManager;
 
-  // Array of function pointers for display
-  typedef void (Clock::*DisplayAction)();
-  DisplayAction displaySequence[26]; // Enough for all sequence elements
+  DisplayAction displaySequence[Display::MAX_SEQUENCE_LENGTH];
   int displaySequenceLength = 0;
 };
 
 // Initialize clock process functions
 void init_clock_process();
-void detachInterrupt_clock_process();
 void clock_loop();

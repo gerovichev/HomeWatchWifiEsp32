@@ -33,15 +33,23 @@ String formatTime(time_t rawTime) {
   return String(timeStr);
 }
 
-// Sets the intensity based on the current time
-void setIntensityByTime(time_t timeNow) {
-  int intensity = (timeNow > sunrise && timeNow < sunset)
-                      ? Display::INTENSITY_DAY
-                      : Display::INTENSITY_NIGHT;
+// Sets the intensity based on the current time. Operates purely on its
+// arguments so the caller can snapshot the shared clock/sun values under
+// dataMutex and release it before touching the display.
+void setIntensityByTime(time_t nowEpoch, time_t sunriseEpoch,
+                        time_t sunsetEpoch) {
+  // Before the first successful weather fetch sunrise/sunset are still 0, which
+  // would read as "night" and blank the display. Keep daylight intensity until
+  // we actually have a sun window to compare against.
+  const bool sunWindowKnown = (sunriseEpoch > 0 && sunsetEpoch > sunriseEpoch);
+  const bool isDaytime =
+      !sunWindowKnown || (nowEpoch > sunriseEpoch && nowEpoch < sunsetEpoch);
 
-  LOG_VERBOSE("sunrise: " + formatTime(sunrise));
-  LOG_VERBOSE("Time: " + formatTime(timeNow));
-  LOG_VERBOSE("sunset: " + formatTime(sunset));
+  int intensity = isDaytime ? Display::INTENSITY_DAY : Display::INTENSITY_NIGHT;
+
+  LOG_VERBOSE("sunrise: " + formatTime(sunriseEpoch));
+  LOG_VERBOSE("Time: " + formatTime(nowEpoch));
+  LOG_VERBOSE("sunset: " + formatTime(sunsetEpoch));
   LOG_VERBOSE("intensity: " + String(intensity));
   M.setIntensity(intensity);
 }
@@ -90,49 +98,40 @@ void drawStringMax(const String &tape) {
   }
 }
 
+// Hands the pending message to MD_Parola. Note that displayText() stores the
+// pointer rather than copying, which is why the text must live in the static
+// currentDisplayBuffer and not in a temporary.
+static void commitPendingText(const __FlashStringHelper *logPrefix) {
+  newMessageAvailable = false;
+  M.displayReset();
+  LOG_INFO(String(logPrefix) + lastDisplayedText);
+  M.displayClear();
+
+  strncpy(currentDisplayBuffer, lastDisplayedText.c_str(),
+          sizeof(currentDisplayBuffer) - 1);
+  currentDisplayBuffer[sizeof(currentDisplayBuffer) - 1] = '\0';
+
+  // Short strings fit the panel outright; longer ones have to scroll.
+  if (lastDisplayedText.length() > 5) {
+    M.displayText(currentDisplayBuffer, PA_LEFT, Display::SCROLL_SPEED_MS,
+                  Display::PAUSE_TIME_MS, PA_SCROLL_LEFT, PA_NO_EFFECT);
+  } else {
+    M.displayText(currentDisplayBuffer, PA_CENTER, Display::SCROLL_SPEED_MS,
+                  Display::PAUSE_TIME_MS, PA_PRINT, PA_NO_EFFECT);
+  }
+}
+
 // Displays the text on the LED display
 void realDisplayText() {
   if (M.displayAnimate() && newMessageAvailable) {
-    newMessageAvailable = false;
-    M.displayReset();
-    LOG_INFO(">> Display: " + lastDisplayedText);
-    M.displayClear();
-
-    strncpy(currentDisplayBuffer, lastDisplayedText.c_str(), sizeof(currentDisplayBuffer) - 1);
-    currentDisplayBuffer[sizeof(currentDisplayBuffer) - 1] = '\0';
-
-    if (lastDisplayedText.length() > 5) {
-      M.displayText(currentDisplayBuffer, PA_LEFT,
-                    Display::SCROLL_SPEED_MS, Display::PAUSE_TIME_MS,
-                    PA_SCROLL_LEFT, PA_NO_EFFECT);
-    } else {
-      M.displayText(currentDisplayBuffer, PA_CENTER,
-                    Display::SCROLL_SPEED_MS, Display::PAUSE_TIME_MS, PA_PRINT,
-                    PA_NO_EFFECT);
-    }
+    commitPendingText(F(">> Display: "));
   }
 }
 
 // Force display text (for use in setup when display may not be ready)
 void forceDisplayText() {
   if (newMessageAvailable) {
-    newMessageAvailable = false;
-    M.displayReset();
-    LOG_INFO(">> Force Display: " + lastDisplayedText);
-    M.displayClear();
-
-    strncpy(currentDisplayBuffer, lastDisplayedText.c_str(), sizeof(currentDisplayBuffer) - 1);
-    currentDisplayBuffer[sizeof(currentDisplayBuffer) - 1] = '\0';
-
-    if (lastDisplayedText.length() > 5) {
-      M.displayText(currentDisplayBuffer, PA_LEFT,
-                    Display::SCROLL_SPEED_MS, Display::PAUSE_TIME_MS,
-                    PA_SCROLL_LEFT, PA_NO_EFFECT);
-    } else {
-      M.displayText(currentDisplayBuffer, PA_CENTER,
-                    Display::SCROLL_SPEED_MS, Display::PAUSE_TIME_MS, PA_PRINT,
-                    PA_NO_EFFECT);
-    }
+    commitPendingText(F(">> Force Display: "));
   }
 }
 

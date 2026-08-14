@@ -26,7 +26,6 @@ extern bool isWebClientNeeded;
 extern boolean isReadWeather;
 
 void initPerDevice();
-void verifyWifi();
 String getNumberWithZerro(int dig);
 void drawString(const String& tape);
 char getGradValue();

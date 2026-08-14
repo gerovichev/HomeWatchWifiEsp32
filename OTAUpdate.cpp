@@ -6,35 +6,53 @@
 // Global variable definition
 String pathOta;
 
-// OTA callbacks
+// OTA callbacks.
+//
+// These run on the data-update task (core 0) while loop() on core 1 is driving
+// MD_Parola over the same SPI bus and the same MD_Parola object. Writing to the
+// display from here would interleave SPI transactions with the display core, so
+// these callbacks only log - the panel keeps showing the normal rotation until
+// the device reboots into the new firmware.
 void update_started() {
   LOG_INFO_F("OTA update process started");
-  printText(F("Update"));
 }
 
 void update_finished() {
-  LOG_INFO_F("OTA update process finished");
-  printText(F("Restart"));
+  LOG_INFO_F("OTA update process finished, restarting");
 }
 
 void update_progress(int cur, int total) {
-  int percent = 0;
   if (total > 0) {
-    percent = (cur * 100) / total;
-  }
-  printText(String(percent, DEC) + " %");
-  if (total > 0) {
-    LOG_VERBOSE("OTA progress: " + String(cur) + "/" + String(total) +
-                " bytes (" + String(percent) + "%)");
+    // Log on decade boundaries only: the callback fires per chunk and OTA is
+    // already the slowest thing the device does.
+    static int lastLoggedDecile = -1;
+    const int percent = (cur * 100) / total;
+    const int decile = percent / 10;
+    if (decile != lastLoggedDecile) {
+      lastLoggedDecile = decile;
+      LOG_INFO("OTA progress: " + String(cur) + "/" + String(total) +
+               " bytes (" + String(percent) + "%)");
+    }
   } else {
-    LOG_VERBOSE("OTA progress: " + String(cur) + "/unknown bytes (" +
-                String(percent) + "%)");
+    LOG_VERBOSE("OTA progress: " + String(cur) + "/unknown bytes");
   }
 }
 
 void update_error(int err) {
   LOG_ERROR("OTA update fatal error code: " + String(err) + " (" +
             httpUpdate.getLastErrorString() + ")");
+}
+
+// Builds the OTA query string. Called per update check rather than once at
+// init because `ip` is refreshed by location_init() on every data cycle, and a
+// URL built at boot would keep reporting a stale address forever.
+static void buildOtaPath() {
+  pathOta = "";
+  pathOta.reserve(strlen(webOTA_updateURL) + macAddrSt.length() +
+                  hostname_m.length() + ip.length() + version_prg.length() +
+                  50);
+  pathOta = String(webOTA_updateURL) + F("?MAC=") + macAddrSt + F("&hst=") +
+            hostname_m + F("&ip=") + ip + F("&ver=") + version_prg;
 }
 
 // OTA initialization
@@ -46,16 +64,13 @@ void web_ota_init() {
   // Note: ESP32 HTTPUpdate doesn't have setClientTimeout
   httpUpdate.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
 
-  // Constructing OTA URL - optimize to reduce String allocations
-  pathOta.reserve(strlen(webOTA_updateURL) + macAddrSt.length() +
-                  hostname_m.length() + ip.length() + version_prg.length() +
-                  50);
-  pathOta = String(webOTA_updateURL) + F("?MAC=") + macAddrSt + F("&hst=") +
-            hostname_m + F("&ip=") + ip + F("&ver=") + version_prg;
+  buildOtaPath();
 }
 
 // Perform OTA update
 void update_ota() {
+  buildOtaPath();
+
   WiFiClientSecure client;
   setupSecureClient(client, "OTA server");
   client.setTimeout(Timing::OTA_CLIENT_TIMEOUT_MS);

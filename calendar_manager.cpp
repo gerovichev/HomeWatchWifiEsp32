@@ -1,4 +1,5 @@
 #include "calendar_manager.h"
+#include "constants.h"
 #include "logger.h"
 #include "TimeManager.h"
 #include "global_config.h"
@@ -51,7 +52,7 @@ void CalendarManager::findNextEvent() {
     }
     
     time_t now = timeClient.getEpochTime();
-    if (now < 946684800) {
+    if (now < Timing::MIN_VALID_EPOCH) {
         return; // Time not synchronized
     }
     
@@ -354,6 +355,9 @@ void CalendarManager::printNextEventToScreen() const {
 String CalendarManager::formatEventTime(time_t eventTime) const {
     struct tm timeinfoBuf;
     struct tm* timeinfo = gmtime_r(&eventTime, &timeinfoBuf);
+    if (timeinfo == nullptr) {
+        return String();
+    }
     char timeStr[6];
     snprintf(timeStr, sizeof(timeStr), "%02d:%02d", timeinfo->tm_hour, timeinfo->tm_min);
     return String(timeStr);
@@ -364,8 +368,11 @@ String CalendarManager::formatEventTimeRange(time_t startTime, time_t endTime) c
     struct tm startInfoBuf, endInfoBuf;
     struct tm* startInfo = gmtime_r(&startTime, &startInfoBuf);
     struct tm* endInfo = gmtime_r(&endTime, &endInfoBuf);
+    if (startInfo == nullptr || endInfo == nullptr) {
+        return String();
+    }
     char timeStr[12];
-    snprintf(timeStr, sizeof(timeStr), "%02d:%02d-%02d:%02d", 
+    snprintf(timeStr, sizeof(timeStr), "%02d:%02d-%02d:%02d",
              startInfo->tm_hour, startInfo->tm_min,
              endInfo->tm_hour, endInfo->tm_min);
     return String(timeStr);
@@ -388,7 +395,7 @@ bool CalendarManager::shouldUpdateToday() const {
     
     // Check if time is valid before using it
     time_t now = timeClient.getEpochTime();
-    if (now < 946684800) { // Check if time is valid (after 2000-01-01)
+    if (now < Timing::MIN_VALID_EPOCH) {
         LOG_DEBUG_F("Time not synchronized, will update calendar when time is available");
         return true; // Update when time becomes available
     }
@@ -409,7 +416,7 @@ bool CalendarManager::shouldUpdateToday() const {
 // Mark calendar as updated for today
 void CalendarManager::markUpdated() {
     time_t now = timeClient.getEpochTime();
-    if (now < 946684800) { // Check if time is valid (after 2000-01-01)
+    if (now < Timing::MIN_VALID_EPOCH) {
         LOG_WARNING_F("Time not synchronized, cannot mark calendar as updated");
         return;
     }

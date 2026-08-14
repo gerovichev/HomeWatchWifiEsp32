@@ -7,6 +7,7 @@
 #include "secure_client.h"
 #include "constants.h"
 #include "logger.h"
+#include "error_handler.h"
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
@@ -16,8 +17,9 @@ WeatherManager::WeatherManager()
 {
     // Initialize weather data members here, if necessary
     temperature = 0;
-    temp_max = 0;
+    feelsLikeTemp = 0;
     pressure = 0;
+    main_ext_humidity = 0;
     description_weather = "";
 }
 
@@ -27,23 +29,27 @@ void WeatherManager::readWeather() {
 
   int maxAttempts = Retry::MAX_ATTEMPTS_WEATHER;
 
-  WiFiClientSecure client;
-  setupSecureClient(client, "openweathermap.org");
-  HTTPClient http;
-  http.setTimeout(Timing::HTTP_TIMEOUT_MS);
-
   // Optimize URL construction to avoid multiple String concatenations
   char path[Buffer::PATH_BUFFER_SIZE];
   snprintf(path, sizeof(path), 
            "https://api.openweathermap.org/data/3.0/onecall?lat=%.2f&lon=%.2f&units=metric&exclude=minutely,hourly,daily,alerts&appid=%s&lang=%s",
            latitude, longitude, appidWeather, lang_weather.c_str());
 
-  LOG_DEBUG("Weather API URL: " + String(path));
+  // Deliberately logs coordinates only - the full URL carries appidWeather.
+  LOG_DEBUG("Weather API request for lat=" + String(latitude, 2) +
+            ", lon=" + String(longitude, 2) + ", lang=" + lang_weather);
 
   int attempts = 0;
   bool success = false;
 
   while (attempts < maxAttempts && !success) {
+    // A fresh client per attempt: mbedTLS state is not reusable after a failed
+    // handshake, so retrying on the same WiFiClientSecure just fails again.
+    WiFiClientSecure client;
+    setupSecureClient(client, "openweathermap.org");
+    HTTPClient http;
+    http.setTimeout(Timing::HTTP_TIMEOUT_MS);
+
     if (http.begin(client, path)) {
       LOG_DEBUG("Weather API attempt " + String(attempts + 1) + "/" + String(maxAttempts));
       int httpCode = http.GET();  // Send the request
@@ -52,40 +58,54 @@ void WeatherManager::readWeather() {
         String payload = http.getString();  // Get the request response payload
         LOG_VERBOSE("Weather API response: " + payload);
 
-        StaticJsonDocument<Buffer::JSON_WEATHER_SIZE> doc;  // Weather API response with current weather data
+        JsonDocument doc;  // Weather API response with current weather data
         DeserializationError error = deserializeJson(doc, payload);
 
         // Test if parsing succeeds
         if (!error) {
           JsonObject current = doc[F("current")];
-          unsigned int timezone_offset = doc[F("timezone_offset")];
+
+          // Signed: offsets west of UTC are negative, and an unsigned type here
+          // wraps them into ~4.29e9 and destroys the sunrise/sunset window.
+          long timezone_offset = doc[F("timezone_offset")] | 0L;
+
+          // Compute everything into locals first, so the critical section is a
+          // single burst of assignments and the display core can never observe
+          // sunrise before its timezone adjustment is applied.
+          const time_t newSunrise =
+              static_cast<time_t>(current[F("sunrise")] | 0L) + timezone_offset;
+          const time_t newSunset =
+              static_cast<time_t>(current[F("sunset")] | 0L) + timezone_offset;
+
+          const int newTemperature = (int)floor((double)current[F("temp")] + 0.5);
+          const int newFeelsLike = (int)floor((double)current[F("feels_like")] + 0.5);
+          const int newPressure = (int)((double)current[F("pressure")] * 0.75006375541921);  // Convert pressure to mmHg
+          const int newHumidity = current[F("humidity")] | 0;
+
+          // `| ""` keeps a missing/!string description from yielding "null".
+          String newDescription = String(current[F("weather")][0][F("description")] | "");
+          newDescription.toUpperCase();
 
           if (dataMutex != NULL) {
             xSemaphoreTake(dataMutex, portMAX_DELAY);
           }
 
-          sunrise = current[F("sunrise")];
-          sunset = current[F("sunset")];
-          sunrise += timezone_offset;
-          sunset += timezone_offset;
-
-          temperature = (int)floor((double)current[F("temp")] + 0.5);
-          temp_max = (int)floor((double)current[F("feels_like")] + 0.5);
-          pressure = (int)((double)current[F("pressure")] * 0.75006375541921);  // Convert pressure to mmHg
-          main_ext_humidity = current[F("humidity")];
-
-          JsonObject weather = current[F("weather")][0];
-          description_weather = String(weather[F("description")]);
-          description_weather.toUpperCase();
+          sunrise = newSunrise;
+          sunset = newSunset;
+          temperature = newTemperature;
+          feelsLikeTemp = newFeelsLike;
+          pressure = newPressure;
+          main_ext_humidity = newHumidity;
+          description_weather = newDescription;
 
           if (dataMutex != NULL) {
             xSemaphoreGive(dataMutex);
           }
 
-          LOG_INFO("Weather updated: " + String(temperature) + "°C, " + 
-                   String(main_ext_humidity) + "%, " + String(pressure) + "mm");
-          LOG_DEBUG("Feels like: " + String(temp_max) + "°C");
-          LOG_DEBUG("Description: " + description_weather);
+          LOG_INFO("Weather updated: " + String(newTemperature) + "°C, " +
+                   String(newHumidity) + "%, " + String(newPressure) + "mm");
+          LOG_DEBUG("Feels like: " + String(newFeelsLike) + "°C");
+          LOG_DEBUG("Description: " + newDescription);
 
           success = true;  // Set success flag
         } else {
@@ -99,17 +119,21 @@ void WeatherManager::readWeather() {
       LOG_ERROR_F("Failed to begin weather HTTP connection");
     }
 
+    http.end();  // Close connection before the next retry reuses this client
+
     if (!success) {
       attempts++;
       if (attempts < maxAttempts) {
         LOG_WARNING("Retrying weather request (" + String(attempts) + "/" + String(maxAttempts) + ")...");
         delay(Timing::RETRY_DELAY_MS);  // Wait before retrying
       } else {
-        LOG_ERROR("Failed to get weather data after " + String(maxAttempts) + " attempts");
+        ErrorHandler::handleError(ErrorHandler::ERROR_API,
+                                  "Weather fetch failed after " + String(maxAttempts) +
+                                      " attempts, keeping previous reading",
+                                  attempts, maxAttempts);
       }
     }
   }
-  http.end();  // Close connection
 }
 
 // Function to print temperature on the screen
@@ -119,9 +143,9 @@ void WeatherManager::printWeatherToScreen() const{
 }
 
 // Function to print feels-like temperature on the screen
-void WeatherManager::printMaxTempToScreen() const{
+void WeatherManager::printFeelsLikeToScreen() const{
   // Very short format to fit on display: "~25°C" (tilde ~ means "feels like")
-  String tape = String("~") + String(temp_max, DEC) + getGradValue() + String("C");
+  String tape = String("~") + String(feelsLikeTemp, DEC) + getGradValue() + String("C");
   drawString(tape);
 }
 

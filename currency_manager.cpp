@@ -1,363 +1,241 @@
 #include "currency_manager.h"
 #include "constants.h"
 #include "logger.h"
+#include "error_handler.h"
 #include "secure_client.h"
 #include <WiFi.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
+#include <functional>
 
 extern SemaphoreHandle_t dataMutex;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// File-local helper functions
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Execute http.GET(), handle all error cases and return the raw payload.
+ * Returns an empty String on any error (already logged).
+ */
+static String performGetRequest(HTTPClient &http) {
+    LOG_VERBOSE("Calling http.GET()...");
+    unsigned long startTime = millis();
+    int httpCode = http.GET();
+    unsigned long elapsed = millis() - startTime;
+    LOG_DEBUG("http.GET() completed in " + String(elapsed) + "ms, code: " + String(httpCode));
+
+    if (httpCode != HTTP_CODE_OK) {
+        String errorMsg = "HTTP request failed with code: " + String(httpCode, DEC);
+        if (httpCode == -1) {
+            errorMsg += " (Connection failed - SSL handshake likely failed)";
+            LOG_DEBUG("Error -1 typically means: connection not established, SSL handshake failed, or DNS resolution failed");
+            LOG_DEBUG("WiFi status check: " + String(WiFi.status() == WL_CONNECTED ? "Connected" : "Disconnected"));
+        } else if (httpCode < 0) {
+            errorMsg += " (HTTP client error)";
+        } else if (httpCode >= 400 && httpCode < 500) {
+            errorMsg += " (Client error - check authentication/authorization)";
+            String errorBody = http.getString();
+            if (errorBody.length() > 0) {
+                LOG_DEBUG("Error response body: " + errorBody.substring(0, min(200, (int)errorBody.length())));
+            }
+        } else if (httpCode >= 500) {
+            errorMsg += " (Server error)";
+        }
+        LOG_WARNING(errorMsg);
+        return String();
+    }
+
+    String payload = http.getString();
+    LOG_VERBOSE("Payload length: " + String(payload.length()));
+    return payload;
+}
+
+/** Parse a currency (USD/EUR) JSON payload – expects {"state": <value>}. */
+static float parseCurrencyJson(const String &payload) {
+    JsonDocument doc;
+    DeserializationError error = deserializeJson(doc, payload);
+    if (error) {
+        LOG_ERROR("deserializeJson() failed: " + String(error.c_str()));
+        return 0.0f;
+    }
+    // as<float>() rather than `| 0.0f`: Home Assistant serialises state as a
+    // JSON *string* ("2.96"), and the `|` operator falls back to the default
+    // for anything that is not already a number.
+    return doc[F("state")].as<float>();
+}
+
+/**
+ * Parse a crypto JSON payload.
+ * Supports the new Home Assistant sensor format {"state": <value>}
+ * and legacy CoinCap v3 format {"timestamp":..., "data":["87214.89"]}.
+ */
+static float parseCryptoJson(const String &payload) {
+    JsonDocument doc;
+    DeserializationError error = deserializeJson(doc, payload);
+    if (error) {
+        LOG_ERROR("deserializeJson() failed: " + String(error.c_str()));
+        return 0.0f;
+    }
+    // as<float>() throughout: both formats deliver the price as a JSON string,
+    // which the `|` fallback operator would discard in favour of the default.
+    if (!doc[F("state")].isNull()) {
+        return doc[F("state")].as<float>();
+    }
+    if (doc[F("data")].is<JsonArray>()) {
+        JsonArray arr = doc[F("data")].as<JsonArray>();
+        if (arr.size() > 0) {
+            return arr[0].as<float>();
+        }
+    }
+    LOG_ERROR("Failed to parse crypto price from response");
+    return 0.0f;
+}
+
+/**
+ * Generic retry loop for fetching a float value over HTTPS.
+ * @param path        Full URL to request.
+ * @param bearerToken Bearer token for the Authorization header.
+ * @param parseFn     Function that extracts a float from the raw payload.
+ */
+static float fetchWithRetry(const char *path, const char *bearerToken,
+                            std::function<float(const String &)> parseFn) {
+    if (WiFi.status() != WL_CONNECTED) {
+        LOG_ERROR_F("WiFi not connected, cannot fetch data");
+        return 0.0f;
+    }
+
+    const int maxAttempts = Retry::MAX_ATTEMPTS_CURRENCY;
+    int attempts = 0;
+    bool success = false;
+    float value = 0.0f;
+
+    while (attempts < maxAttempts && !success) {
+        if (WiFi.status() != WL_CONNECTED) {
+            LOG_ERROR("WiFi disconnected during fetch (attempt " + String(attempts + 1) + ")");
+            break;
+        }
+
+        yield();
+
+        WiFiClientSecure client;
+        setupSecureClient(client, "API");
+        HTTPClient http;
+        http.setTimeout(Timing::HTTP_TIMEOUT_CURRENCY_MS);
+
+        LOG_DEBUG("Attempt " + String(attempts + 1) + "/" + String(maxAttempts) + " – opening connection");
+        bool connectionStarted = http.begin(client, path);
+
+        if (connectionStarted) {
+            http.addHeader(F("Authorization"), String("Bearer ") + String(bearerToken));
+            http.addHeader(F("Content-Type"), F("application/json"));
+            LOG_DEBUG("HTTP connection started, sending GET request...");
+            yield();
+
+            String payload = performGetRequest(http);
+            http.end();
+            client.stop();
+            yield();
+
+            if (payload.length() > 0) {
+                value = parseFn(payload);
+                if (value > 0.0f) {
+                    success = true;
+                    LOG_DEBUG("Data retrieved successfully: " + String(value, 2));
+                } else {
+                    LOG_WARNING("Parsed value invalid (attempt " + String(attempts + 1) + "/" + String(maxAttempts) + ")");
+                }
+            } else {
+                LOG_WARNING("Empty payload (attempt " + String(attempts + 1) + "/" + String(maxAttempts) + ")");
+            }
+        } else {
+            LOG_ERROR("Failed to begin HTTP connection (attempt " + String(attempts + 1) + "/" + String(maxAttempts) + ")");
+            LOG_DEBUG("WiFi status: " + String(WiFi.status()) + ", RSSI: " + String(WiFi.RSSI()));
+            client.stop();
+            yield();
+        }
+
+        if (!success) {
+            attempts++;
+            if (attempts < maxAttempts) {
+                LOG_WARNING("Retrying request (" + String(attempts) + "/" + String(maxAttempts) + ")...");
+                delay(Timing::RETRY_DELAY_MS);
+                yield();
+            } else {
+                ErrorHandler::handleError(ErrorHandler::ERROR_API,
+                                          "Rate fetch failed after " + String(maxAttempts) +
+                                              " attempts, keeping previous value",
+                                          attempts, maxAttempts);
+            }
+        }
+    }
+
+    return value;
+}
+
+/** Draw a formatted currency/crypto value to the screen. */
+static void displayValue(const char *symbol, float value, int decimals = 2) {
+    if (value > 0) {
+        drawString(String(symbol) + String(value, decimals));
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CurrencyManager – public API
+// ─────────────────────────────────────────────────────────────────────────────
 
 CurrencyManager::CurrencyManager()
     : bearerTokenCurrency(confBearerTokenCurrency),
       bearerTokenCrypto(confBearerTokenCurrency),
       pathCurrencyUSD(confPathCurrencyUSD),
-      pathCurrencyEUR(confPathCurrencyEUR), pathCryptoBTC(confPathCryptoBTC),
-      dataUSDValue(0.0), dataEURValue(0.0), dataBTCValue(0.0) {
-  // const char* pointers are assigned directly - no String copies, saves RAM
+      pathCurrencyEUR(confPathCurrencyEUR),
+      pathCryptoBTC(confPathCryptoBTC),
+      dataUSDValue(0.0f), dataEURValue(0.0f), dataBTCValue(0.0f) {
+    // const char* pointers assigned directly – no String copies, saves RAM
 }
 
 void CurrencyManager::initialize() {
-  if (float tmpDataUSD = readCurrency(pathCurrencyUSD); tmpDataUSD > 0) {
-    if (dataMutex != NULL) xSemaphoreTake(dataMutex, portMAX_DELAY);
-    dataUSDValue = tmpDataUSD;
-    if (dataMutex != NULL) xSemaphoreGive(dataMutex);
-  }
+    if (float v = readCurrency(pathCurrencyUSD); v > 0) {
+        if (dataMutex != NULL) xSemaphoreTake(dataMutex, portMAX_DELAY);
+        dataUSDValue = v;
+        if (dataMutex != NULL) xSemaphoreGive(dataMutex);
+    }
+    yield();
 
-  yield(); // Allow system tasks
+    if (float v = readCurrency(pathCurrencyEUR); v > 0) {
+        if (dataMutex != NULL) xSemaphoreTake(dataMutex, portMAX_DELAY);
+        dataEURValue = v;
+        if (dataMutex != NULL) xSemaphoreGive(dataMutex);
+    }
+    yield();
 
-  if (float tmpDataEUR = readCurrency(pathCurrencyEUR); tmpDataEUR > 0) {
-    if (dataMutex != NULL) xSemaphoreTake(dataMutex, portMAX_DELAY);
-    dataEURValue = tmpDataEUR;
-    if (dataMutex != NULL) xSemaphoreGive(dataMutex);
-  }
-
-  yield();
-
-  if (float tmpDataBTC = readCrypto(pathCryptoBTC); tmpDataBTC > 0) {
-    if (dataMutex != NULL) xSemaphoreTake(dataMutex, portMAX_DELAY);
-    dataBTCValue = tmpDataBTC;
-    if (dataMutex != NULL) xSemaphoreGive(dataMutex);
-  }
+    if (float v = readCrypto(pathCryptoBTC); v > 0) {
+        if (dataMutex != NULL) xSemaphoreTake(dataMutex, portMAX_DELAY);
+        dataBTCValue = v;
+        if (dataMutex != NULL) xSemaphoreGive(dataMutex);
+    }
 }
 
 void CurrencyManager::displayUSDToScreen() {
-  if (dataUSDValue > 0) {
-    drawString(String("$ ") + String(dataUSDValue, 2));
-  }
+    displayValue("$ ", dataUSDValue);
 }
 
 void CurrencyManager::displayEURToScreen() {
-  if (dataEURValue > 0) {
-    drawString(String("\x84 ") + String(dataEURValue, 2));
-  }
+    displayValue("\x84 ", dataEURValue);
 }
 
 void CurrencyManager::displayBTCToScreen() {
-  if (dataBTCValue > 0) {
-    drawString(
-        String("B$ ") +
-        String(
-            dataBTCValue,
-            0)); // \x80 is often a bitcoin symbol in custom fonts or just 'B'
-  }
+    displayValue("B$ ", dataBTCValue, 0);
 }
 
-bool CurrencyManager::setupHttpClient(HTTPClient &http,
-                                      WiFiClientSecure &client,
-                                      const char *path, const char *token) {
-  setupSecureClient(client, "currency API");
-  http.setTimeout(Timing::HTTP_TIMEOUT_CURRENCY_MS);
-
-  LOG_DEBUG("Currency API path: " + String(path));
-
-  if (!http.begin(client, path)) {
-    LOG_ERROR_F("Failed to begin HTTP connection");
-    return false;
-  }
-
-  String authHeader = String("Bearer ") + String(token);
-  LOG_DEBUG("Currency API Bearer: " + String(authHeader));
-  http.addHeader(F("Authorization"), authHeader);
-  http.addHeader(F("Content-Type"), F("application/json"));
-  return true;
-}
-
-float CurrencyManager::handleHttpResponse(HTTPClient &http) {
-    LOG_VERBOSE("Calling http.GET()...");
-    unsigned long startTime = millis();
-    int httpCode = http.GET();
-    unsigned long elapsed = millis() - startTime;
-    
-    LOG_DEBUG("http.GET() completed in " + String(elapsed) + "ms, code: " + String(httpCode));
-    
-    if (httpCode != HTTP_CODE_OK) {
-        // Provide more detailed error information
-        String errorMsg = "HTTP request failed with code: " + String(httpCode, DEC);
-        if (httpCode == -1) {
-            errorMsg += " (Connection failed - SSL handshake likely failed)";
-            LOG_DEBUG("Error -1 typically means: connection not established, SSL handshake failed, or DNS resolution failed");
-            LOG_DEBUG("WiFi status check: " + String(WiFi.status() == WL_CONNECTED ? "Connected" : "Disconnected"));
-        } else if (httpCode < 0) {
-            errorMsg += " (HTTP client error)";
-        } else if (httpCode >= 400 && httpCode < 500) {
-            errorMsg += " (Client error - check authentication/authorization)";
-            // Try to get error response body for more details
-            String errorBody = http.getString();
-            if (errorBody.length() > 0) {
-                LOG_DEBUG("Error response body: " + errorBody.substring(0, min(200, (int)errorBody.length())));
-            }
-        } else if (httpCode >= 500) {
-            errorMsg += " (Server error)";
-        }
-        LOG_WARNING(errorMsg);
-        return 0.0;
-    }
-
-  String payload = http.getString();
-  LOG_VERBOSE("Currency API payload length: " + String(payload.length()));
-
-  StaticJsonDocument<Buffer::JSON_CURRENCY_SIZE> doc;
-  DeserializationError error = deserializeJson(doc, payload);
-  if (error) {
-    LOG_ERROR("deserializeJson() failed: " + String(error.c_str()));
-    return 0.0;
-  }
-
-  return doc[F("state")]; // Extract currency value from JSON
-}
-
-float CurrencyManager::handleCryptoResponse(HTTPClient &http) {
-    LOG_VERBOSE("Calling http.GET()...");
-    unsigned long startTime = millis();
-    int httpCode = http.GET();
-    unsigned long elapsed = millis() - startTime;
-    
-    LOG_DEBUG("http.GET() completed in " + String(elapsed) + "ms, code: " + String(httpCode));
-    
-    if (httpCode != HTTP_CODE_OK) {
-        // Provide more detailed error information
-        String errorMsg = "HTTP request failed with code: " + String(httpCode, DEC);
-        if (httpCode == -1) {
-            errorMsg += " (Connection failed - SSL handshake likely failed)";
-            LOG_DEBUG("Error -1 typically means: connection not established, SSL handshake failed, or DNS resolution failed");
-            LOG_DEBUG("WiFi status check: " + String(WiFi.status() == WL_CONNECTED ? "Connected" : "Disconnected"));
-        } else if (httpCode < 0) {
-            errorMsg += " (HTTP client error)";
-        } else if (httpCode >= 400 && httpCode < 500) {
-            errorMsg += " (Client error - check authentication/authorization)";
-            // Try to get error response body for more details
-            String errorBody = http.getString();
-            if (errorBody.length() > 0) {
-                LOG_DEBUG("Error response body: " + errorBody.substring(0, min(200, (int)errorBody.length())));
-            }
-        } else if (httpCode >= 500) {
-            errorMsg += " (Server error)";
-        }
-        LOG_WARNING(errorMsg);
-        return 0.0;
-    }
-
-  String payload = http.getString();
-  LOG_VERBOSE("Crypto API payload length: " + String(payload.length()));
-
-  StaticJsonDocument<Buffer::JSON_CURRENCY_SIZE> doc;
-  DeserializationError error = deserializeJson(doc, payload);
-  if (error) {
-    LOG_ERROR("deserializeJson() failed: " + String(error.c_str()));
-    return 0.0;
-  }
-
-  // Check for the "state" field first (new REST API style, Home Assistant sensor format)
-  if (doc.containsKey(F("state"))) {
-    return doc[F("state")].as<float>();
-  }
-
-  // Fallback / legacy support for CoinCap API v3 which returns: {"timestamp":...,"data":["87214.89"]}
-  // Extract first element from data array
-  if (doc.containsKey(F("data")) && doc[F("data")].is<JsonArray>()) {
-    JsonArray dataArray = doc[F("data")].as<JsonArray>();
-    if (dataArray.size() > 0) {
-      return dataArray[0].as<float>();
-    }
-  }
-  
-  LOG_ERROR("Failed to parse crypto price from response");
-  return 0.0;
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// CurrencyManager – private methods
+// ─────────────────────────────────────────────────────────────────────────────
 
 float CurrencyManager::readCurrency(const char *path) {
-  LOG_DEBUG_F("Fetching currency data...");
-
-    // Check WiFi connection before attempting request
-    if (WiFi.status() != WL_CONNECTED) {
-        LOG_ERROR_F("WiFi not connected, cannot fetch currency data");
-        return 0.0;
-    }
-
-    int maxAttempts = Retry::MAX_ATTEMPTS_CURRENCY;
-    LOG_DEBUG("Currency API path: " + String(path));
-
-    int attempts = 0;
-    bool success = false;
-    float currencyValue = 0.0;
-
-    while (attempts < maxAttempts && !success) {
-        // Verify WiFi is still connected before each attempt
-        if (WiFi.status() != WL_CONNECTED) {
-            LOG_ERROR("WiFi disconnected during currency fetch (attempt " + String(attempts + 1) + ")");
-            break;
-        }
-        
-        yield(); // Allow system tasks before creating client
-        
-        // Create fresh client for each attempt to avoid SSL reuse issues
-        WiFiClientSecure client;
-        setupSecureClient(client, "currency API");
-        HTTPClient http;
-        http.setTimeout(Timing::HTTP_TIMEOUT_CURRENCY_MS);
-        
-        // Add reconnect delay for retries
-        if (attempts > 0) {
-            delay(500); // Small delay before retry
-            yield();
-        }
-
-        LOG_DEBUG("Attempting HTTP connection (attempt " + String(attempts + 1) + "/" + String(maxAttempts) + ")...");
-        bool connectionStarted = http.begin(client, path);
-        
-        if (connectionStarted) {
-            String authHeader = String("Bearer ") + String(bearerTokenCurrency);
-            http.addHeader(F("Authorization"), authHeader);
-            http.addHeader(F("Content-Type"), F("application/json"));
-            
-            // Log partial token for debugging (first 20 chars)
-            String tokenPreview = String(bearerTokenCurrency);
-            if (tokenPreview.length() > 20) {
-                tokenPreview = tokenPreview.substring(0, 20) + "...";
-            }
-            LOG_VERBOSE("Authorization header: Bearer " + tokenPreview);
-            LOG_DEBUG("HTTP connection started, sending GET request...");
-            yield(); // Allow system tasks before sending request
-            
-            currencyValue = handleHttpResponse(http);
-            
-            http.end();
-            client.stop(); // Explicitly stop the client
-            yield(); // Allow cleanup to complete
-            
-            if (currencyValue > 0.0) {
-                success = true;
-                LOG_DEBUG("Currency data retrieved successfully: " + String(currencyValue, 2));
-            } else {
-                LOG_WARNING("Failed to retrieve currency data (attempt " + String(attempts + 1) + "/" + String(maxAttempts) + ")");
-            }
-        } else {
-            LOG_ERROR("Failed to begin HTTP connection (attempt " + String(attempts + 1) + "/" + String(maxAttempts) + ")");
-            LOG_DEBUG("WiFi status: " + String(WiFi.status()) + ", RSSI: " + String(WiFi.RSSI()));
-            client.stop();
-            yield();
-        }
-
-        if (!success) {
-            attempts++;
-            if (attempts < maxAttempts) {
-                LOG_WARNING("Retrying currency request (" + String(attempts) + "/" + String(maxAttempts) + ")...");
-                delay(Timing::RETRY_DELAY_MS);
-                yield(); // Allow system tasks
-            } else {
-                LOG_ERROR("Failed to get currency data after " + String(maxAttempts) + " attempts");
-            }
-        }
-    }
-
-    return currencyValue;
+    return fetchWithRetry(path, bearerTokenCurrency, parseCurrencyJson);
 }
 
 float CurrencyManager::readCrypto(const char *path) {
-  LOG_DEBUG_F("Fetching crypto data...");
-
-    // Check WiFi connection before attempting request
-    if (WiFi.status() != WL_CONNECTED) {
-        LOG_ERROR_F("WiFi not connected, cannot fetch crypto data");
-        return 0.0;
-    }
-
-    int maxAttempts = Retry::MAX_ATTEMPTS_CURRENCY;
-    LOG_DEBUG("Crypto API path: " + String(path));
-
-    int attempts = 0;
-    bool success = false;
-    float cryptoValue = 0.0;
-
-    while (attempts < maxAttempts && !success) {
-        // Verify WiFi is still connected before each attempt
-        if (WiFi.status() != WL_CONNECTED) {
-            LOG_ERROR("WiFi disconnected during crypto fetch (attempt " + String(attempts + 1) + ")");
-            break;
-        }
-        
-        yield(); // Allow system tasks before creating client
-        
-        // Create fresh client for each attempt to avoid SSL reuse issues
-        WiFiClientSecure client;
-        setupSecureClient(client, "crypto API");
-        HTTPClient http;
-        http.setTimeout(Timing::HTTP_TIMEOUT_CURRENCY_MS);
-        
-        // Add reconnect delay for retries
-        if (attempts > 0) {
-            delay(500); // Small delay before retry
-            yield();
-        }
-
-        LOG_DEBUG("Attempting HTTP connection (attempt " + String(attempts + 1) + "/" + String(maxAttempts) + ")...");
-        bool connectionStarted = http.begin(client, path);
-        
-        if (connectionStarted) {
-            String authHeader = String("Bearer ") + String(bearerTokenCrypto);
-            http.addHeader(F("Authorization"), authHeader);
-            http.addHeader(F("Content-Type"), F("application/json"));
-            
-            // Log partial token for debugging (first 20 chars)
-            String tokenPreview = String(bearerTokenCrypto);
-            if (tokenPreview.length() > 20) {
-                tokenPreview = tokenPreview.substring(0, 20) + "...";
-            }
-            LOG_VERBOSE("Authorization header: Bearer " + tokenPreview);
-            LOG_DEBUG("HTTP connection started, sending GET request...");
-            yield(); // Allow system tasks before sending request
-            
-            cryptoValue = handleCryptoResponse(http);
-            
-            http.end();
-            client.stop(); // Explicitly stop the client
-            yield(); // Allow cleanup to complete
-            
-            if (cryptoValue > 0.0) {
-                success = true;
-                LOG_DEBUG("Crypto data retrieved successfully: " + String(cryptoValue, 2));
-            } else {
-                LOG_WARNING("Failed to retrieve crypto data (attempt " + String(attempts + 1) + "/" + String(maxAttempts) + ")");
-            }
-        } else {
-            LOG_ERROR("Failed to begin HTTP connection (attempt " + String(attempts + 1) + "/" + String(maxAttempts) + ")");
-            LOG_DEBUG("WiFi status: " + String(WiFi.status()) + ", RSSI: " + String(WiFi.RSSI()));
-            client.stop();
-            yield();
-        }
-
-        if (!success) {
-            attempts++;
-            if (attempts < maxAttempts) {
-                LOG_WARNING("Retrying crypto request (" + String(attempts) + "/" + String(maxAttempts) + ")...");
-                delay(Timing::RETRY_DELAY_MS);
-                yield(); // Allow system tasks
-            } else {
-                LOG_ERROR("Failed to get crypto data after " + String(maxAttempts) + " attempts");
-            }
-        }
-    }
-
-    return cryptoValue;
+    return fetchWithRetry(path, bearerTokenCrypto, parseCryptoJson);
 }

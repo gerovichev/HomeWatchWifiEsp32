@@ -33,7 +33,7 @@ struct DeviceConfig {
   double humidity_delta;
   String nameofWatch;
   bool isOTAreq = true;
-  int intensity;
+  int intensity = 1;
   bool isMQTT = false;
 };
 

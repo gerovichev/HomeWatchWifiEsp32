@@ -1,5 +1,6 @@
 #include "clock.h"
 #include "constants.h"
+#include "device_state.h"
 #include "global_config.h"
 #include "logger.h"
 #include <TimeLib.h>
@@ -16,13 +17,6 @@ void Clock::init() {
   currentDisplayIndex = 0;  // Reset index
   lastDisplayedMinute = -1; // Initialize minute tracking
   lastChangeTime = millis();
-  isTransitioning = false;
-}
-
-// Detach - no longer needed with millis approach but kept for interface
-// compatibility
-void Clock::detach() {
-  // No timer to detach
 }
 
 // Main loop for handling the clock updates
@@ -76,7 +70,7 @@ void Clock::displayTime() { printTimeToScreen(); }
 void Clock::displayDate() { printDateToScreen(); }
 void Clock::displayDay() { printDayToScreen(); }
 void Clock::displayWeather() { weatherManager.printWeatherToScreen(); }
-void Clock::displayMaxTemp() { weatherManager.printMaxTempToScreen(); }
+void Clock::displayMaxTemp() { weatherManager.printFeelsLikeToScreen(); }
 void Clock::displayPressure() { weatherManager.printPressureToScreen(); }
 void Clock::displayWeatherHumidity() { weatherManager.printHumidityToScreen(); }
 void Clock::displayWeatherDescription() {
@@ -89,49 +83,56 @@ void Clock::displayHomeTemp() { dht22_manager.printHomeTemp(); }
 void Clock::displayHomeHumidity() { dht22_manager.printHumidity(); }
 void Clock::displayCalendar() { calendarManager.printNextEventToScreen(); }
 
+// Appends one screen, dropping it (loudly) rather than running off the end of
+// the fixed-size array.
+void Clock::addDisplayAction(DisplayAction action) {
+  if (displaySequenceLength >= Display::MAX_SEQUENCE_LENGTH) {
+    LOG_ERROR_F("Display sequence full, screen dropped - raise Display::MAX_SEQUENCE_LENGTH");
+    return;
+  }
+  displaySequence[displaySequenceLength++] = action;
+}
+
+// The rotation alternates time with each data screen, so screens are added in
+// pairs.
+void Clock::addTimedDisplayAction(DisplayAction action) {
+  addDisplayAction(&Clock::displayTime);
+  addDisplayAction(action);
+}
+
 // Builds display sequence based on available data
 void Clock::buildDisplaySequence() {
-  int index = 0;
+  displaySequenceLength = 0;
 
   // Always show time and date
-  displaySequence[index++] = &Clock::displayTime;
-  displaySequence[index++] = &Clock::displayDate;
-  displaySequence[index++] = &Clock::displayTime;
-  displaySequence[index++] = &Clock::displayDay;
+  addDisplayAction(&Clock::displayTime);
+  addDisplayAction(&Clock::displayDate);
+  addTimedDisplayAction(&Clock::displayDay);
 
-  // Weather
-  displaySequence[index++] = &Clock::displayTime;
-  displaySequence[index++] = &Clock::displayWeather;
-  displaySequence[index++] = &Clock::displayTime;
-  displaySequence[index++] = &Clock::displayMaxTemp;
-  displaySequence[index++] = &Clock::displayTime;
-  displaySequence[index++] = &Clock::displayPressure;
-  displaySequence[index++] = &Clock::displayTime;
-  displaySequence[index++] = &Clock::displayWeatherHumidity;
-  displaySequence[index++] = &Clock::displayTime;
-  displaySequence[index++] = &Clock::displayWeatherDescription;
+  // Weather - skipped entirely on devices configured without it, so they do
+  // not rotate through five screens of never-populated data.
+  if (DeviceState::getInstance().isReadWeather()) {
+    addTimedDisplayAction(&Clock::displayWeather);
+    addTimedDisplayAction(&Clock::displayMaxTemp);
+    addTimedDisplayAction(&Clock::displayPressure);
+    addTimedDisplayAction(&Clock::displayWeatherHumidity);
+    addTimedDisplayAction(&Clock::displayWeatherDescription);
+  }
 
   // Currency
-  displaySequence[index++] = &Clock::displayTime;
-  displaySequence[index++] = &Clock::displayUSD;
-  displaySequence[index++] = &Clock::displayTime;
-  displaySequence[index++] = &Clock::displayEUR;
-  displaySequence[index++] = &Clock::displayTime;
-  displaySequence[index++] = &Clock::displayBTC;
+  addTimedDisplayAction(&Clock::displayUSD);
+  addTimedDisplayAction(&Clock::displayEUR);
+  addTimedDisplayAction(&Clock::displayBTC);
 
   // Home sensors (only if connected)
   if (IS_DHT_CONNECTED) {
-    displaySequence[index++] = &Clock::displayTime;
-    displaySequence[index++] = &Clock::displayHomeTemp;
-    displaySequence[index++] = &Clock::displayTime;
-    displaySequence[index++] = &Clock::displayHomeHumidity;
+    addTimedDisplayAction(&Clock::displayHomeTemp);
+    addTimedDisplayAction(&Clock::displayHomeHumidity);
   }
 
   // Calendar events
-  displaySequence[index++] = &Clock::displayTime;
-  displaySequence[index++] = &Clock::displayCalendar;
+  addTimedDisplayAction(&Clock::displayCalendar);
 
-  displaySequenceLength = index;
   LOG_DEBUG("Display sequence built with " + String(displaySequenceLength) +
             " items");
 }
@@ -210,9 +211,6 @@ CalendarManager &Clock::getCalendarManager() { return calendarManager; }
 
 // Initialize clock process
 void init_clock_process() { Clock::getInstance().init(); }
-
-// Detach the timer interrupt for the clock process
-void detachInterrupt_clock_process() { Clock::getInstance().detach(); }
 
 // Main clock loop
 void clock_loop() { Clock::getInstance().loop(); }

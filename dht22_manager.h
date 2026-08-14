@@ -20,9 +20,11 @@ public:
 private:
   float homeTemp = 0.0;
   float homeHumidity = 0.0;
+  uint8_t sensorErrorCount = 0;
 
   // Function prototypes
 
+  void initSensor();
   void setHomeTemp();
 
 

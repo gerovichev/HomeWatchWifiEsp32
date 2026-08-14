@@ -24,5 +24,3 @@ extern SemaphoreHandle_t dataMutex;
 void setup();
 void dataUpdateTask(void *pvParameters);
 void loop();
-void enableWiFi();
-void disableWiFi();
