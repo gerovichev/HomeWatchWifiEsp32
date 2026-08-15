@@ -5,23 +5,28 @@
 #include "global_config.h"
 #include "led_display.h"
 #include "device_state.h"
+#include "data_lock.h"
+#include "text_utils.h"
 #include <TimeLib.h>
-#include <freertos/FreeRTOS.h>
-#include <freertos/semphr.h>
 #include "clock.h"
 
-extern SemaphoreHandle_t dataMutex;
+namespace {
+constexpr unsigned long DISPLAY_INTERVAL_MS = 15UL * 60UL * 1000UL;
+constexpr int SECONDS_PER_DAY = 86400;
+constexpr int MAX_DAYS_AHEAD = 365;
 
-CalendarManager::CalendarManager() {
-    // Initialize calendar data members
-    nextEventTitle = "";
-    nextEventTime = "";
-    nextEventStartTime = 0;
-    nextEventEndTime = 0;
-    hasEvent = false;
-    lastUpdateDay = -1;  // -1 means never updated
-    lastDisplayTime = 0;  // Never displayed
+// Copies a String into a fixed char buffer, always NUL-terminated.
+void storeText(char* dest, size_t size, const String& src) {
+    strncpy(dest, src.c_str(), size - 1);
+    dest[size - 1] = '\0';
 }
+
+bool isGeneric(const BirthdayEvent& event) {
+    return event.hostname == nullptr || strlen(event.hostname) == 0;
+}
+} // namespace
+
+CalendarManager::CalendarManager() : lastUpdateDay(-1), lastDisplayTime(0) {}
 
 // Check if event matches current board hostname
 bool CalendarManager::matchesHostname(const char* eventHostname) const {
@@ -29,116 +34,96 @@ bool CalendarManager::matchesHostname(const char* eventHostname) const {
     if (eventHostname == nullptr || strlen(eventHostname) == 0) {
         return true;
     }
-    
-    // Get current board hostname
-    String currentHostname = DeviceState::getInstance().getHostname();
-    
-    // Compare hostnames
-    return (currentHostname == String(eventHostname));
+    return DeviceState::getInstance().getHostname() == String(eventHostname);
 }
 
 // Find next upcoming event
 void CalendarManager::findNextEvent() {
-    if (dataMutex != NULL) xSemaphoreTake(dataMutex, portMAX_DELAY);
-    hasEvent = false;
-    nextEventTitle = "";
-    nextEventTime = "";
-    nextEventStartTime = 0;
-    nextEventEndTime = 0;
-    if (dataMutex != NULL) xSemaphoreGive(dataMutex);
-    
+    {
+        DataLock lock;
+        data = CalendarSnapshot();
+    }
+
     if (calendarEventsCount == 0) {
         return;
     }
-    
-    time_t now = timeClient.getEpochTime();
+
+    const time_t now = currentEpoch();
     if (now < Timing::MIN_VALID_EPOCH) {
         return; // Time not synchronized
     }
-    
+
     struct tm timeinfoBuf;
     struct tm* timeinfo = gmtime_r(&now, &timeinfoBuf);
     if (timeinfo == nullptr) {
         return;
     }
-    
-    int currentMonth = timeinfo->tm_mon + 1; // tm_mon is 0-11
-    int currentDay = timeinfo->tm_mday;
-    int currentHour = timeinfo->tm_hour;
-    int currentYear = timeinfo->tm_year + 1900;
-    
+
+    const int currentMonth = timeinfo->tm_mon + 1; // tm_mon is 0-11
+    const int currentDay = timeinfo->tm_mday;
+    const int currentHour = timeinfo->tm_hour;
+    const int currentYear = timeinfo->tm_year + 1900;
+
+    const String currentHostname = DeviceState::getInstance().getHostname();
+
+    // One pre-pass marking the dates that have a board-specific event, so the
+    // generic-vs-specific check below is a bit test instead of a nested scan
+    // over every event. Bit d of specificDays[m] means month m, day d.
+    uint32_t specificDays[13] = {0};
+    for (int i = 0; i < calendarEventsCount; i++) {
+        const BirthdayEvent& event = calendarEvents[i];
+        if (isGeneric(event) || currentHostname != String(event.hostname)) {
+            continue;
+        }
+        if (event.month >= 1 && event.month <= 12 && event.day >= 1 && event.day <= 31) {
+            specificDays[event.month] |= (1UL << event.day);
+        }
+    }
+
     const BirthdayEvent* nextEvent = nullptr;
     time_t nextEventStartTimeValue = 0;
     time_t nextEventEndTimeValue = 0;
-    int minDaysAhead = 366; // More than a year
-    
-    // Get current board hostname for priority checking
-    String currentHostname = DeviceState::getInstance().getHostname();
-    
-    // Find the next event within next 365 days
+    int minDaysAhead = MAX_DAYS_AHEAD + 1;
+
     for (int i = 0; i < calendarEventsCount; i++) {
         const BirthdayEvent* event = &calendarEvents[i];
-        
+
         // Skip events that don't match this board's hostname
         if (!matchesHostname(event->hostname)) {
             continue;
         }
-        
-        // If this is a generic event (empty hostname), check if there's a specific event for this date
-        // If specific event exists, skip this generic event (specific has priority)
-        // This means: "for all boards" = "for all boards EXCEPT those with specific event on this date"
-        if (event->hostname == nullptr || strlen(event->hostname) == 0) {
-            // Check if there's a specific event for this date for current board
-            bool hasSpecificEventForThisDate = false;
-            for (int j = 0; j < calendarEventsCount; j++) {
-                const BirthdayEvent* checkEvent = &calendarEvents[j];
-                if (checkEvent->hostname != nullptr && 
-                    strlen(checkEvent->hostname) > 0 &&
-                    currentHostname == String(checkEvent->hostname) &&
-                    checkEvent->month == event->month &&
-                    checkEvent->day == event->day) {
-                    hasSpecificEventForThisDate = true;
-                    break;
-                }
-            }
-            if (hasSpecificEventForThisDate) {
-                continue; // Skip generic event - specific event exists for this date
-            }
+
+        // A generic ("all boards") event yields to a board-specific event on
+        // the same date: "for all boards EXCEPT those with their own entry".
+        if (isGeneric(*event) &&
+            event->month >= 1 && event->month <= 12 &&
+            (specificDays[event->month] & (1UL << event->day))) {
+            continue;
         }
-        
-        // Calculate days until this event
-        int daysUntilEvent = 0;
-        bool isToday = (event->month == currentMonth && event->day == currentDay);
+
+        const bool isToday = (event->month == currentMonth && event->day == currentDay);
         bool isPastToday = false;
-        
+
         // Check if event is today but already passed
-        if (isToday) {
-            if (event->fromHour >= 0) {
-                // Timed event - check if it already passed
-                if (event->toHour >= 0) {
-                    // Event has end time - check if current time is after end time
-                    if (currentHour > event->toHour) {
-                        isPastToday = true;
-                    }
-                } else {
-                    // Event has start time but no end time (shouldn't happen, but handle it)
-                    // Consider it passed if current hour is after start hour + 1
-                    if (currentHour > event->fromHour + 1) {
-                        isPastToday = true;
-                    }
-                }
+        if (isToday && event->fromHour >= 0) {
+            if (event->toHour >= 0) {
+                isPastToday = (currentHour > event->toHour);
             } else {
-                // All-day event - check if it's past midnight (next day)
-                // All-day events are valid until 23:59, so they're never past today
-                isPastToday = false;
+                // Start time but no end time: treat as an hour long.
+                isPastToday = (currentHour > event->fromHour + 1);
             }
         }
-        
+        // All-day events stay valid until 23:59, so they are never past today.
+
+        if (isToday && isPastToday) {
+            continue;
+        }
+
         // Calculate event start time
         struct tm eventStartTm = {0};
-        if (event->month > currentMonth || 
+        if (event->month > currentMonth ||
             (event->month == currentMonth && event->day > currentDay) ||
-            (isToday && !isPastToday)) {
+            isToday) {
             // Event is this year (today or future)
             eventStartTm.tm_year = currentYear - 1900;
         } else {
@@ -150,10 +135,12 @@ void CalendarManager::findNextEvent() {
         eventStartTm.tm_hour = (event->fromHour >= 0) ? event->fromHour : 0;
         eventStartTm.tm_min = 0;
         eventStartTm.tm_sec = 0;
-        
-        time_t eventStartTime = mktime(&eventStartTm);
-        
-        // Calculate event end time
+
+        // mktime interprets struct tm as local time; setClock() calls
+        // configTime(0, 0, ...) so the process TZ is UTC, matching the
+        // gmtime_r() used to decompose `now` above.
+        const time_t eventStartTime = mktime(&eventStartTm);
+
         struct tm eventEndTm = eventStartTm;
         if (event->toHour >= 0) {
             eventEndTm.tm_hour = event->toHour;
@@ -163,17 +150,10 @@ void CalendarManager::findNextEvent() {
             eventEndTm.tm_hour = 23;
             eventEndTm.tm_min = 59;
         }
-        time_t eventEndTime = mktime(&eventEndTm);
-        
-        // Skip if event already ended today
-        if (isToday && isPastToday) {
-            continue;
-        }
-        
-        // Calculate days until event
-        daysUntilEvent = (eventStartTime - now) / 86400;
-        
-        // Check if this is the closest upcoming event
+        const time_t eventEndTime = mktime(&eventEndTm);
+
+        const int daysUntilEvent = (eventStartTime - now) / SECONDS_PER_DAY;
+
         if (daysUntilEvent >= 0 && daysUntilEvent < minDaysAhead) {
             minDaysAhead = daysUntilEvent;
             nextEvent = event;
@@ -181,59 +161,58 @@ void CalendarManager::findNextEvent() {
             nextEventEndTimeValue = eventEndTime;
         }
     }
-    
-    if (nextEvent != nullptr && minDaysAhead <= 365) {
-        if (dataMutex != NULL) xSemaphoreTake(dataMutex, portMAX_DELAY);
-        
-        hasEvent = true;
-        
-        // Use board-specific title if available, otherwise use general title
-        if (nextEvent->boardTitle != nullptr && strlen(nextEvent->boardTitle) > 0) {
-            nextEventTitle = String(nextEvent->boardTitle);
-        } else {
-            nextEventTitle = String(nextEvent->title);
-        }
-        
-        nextEventStartTime = nextEventStartTimeValue;
-        nextEventEndTime = nextEventEndTimeValue;
-        
-        // Format time display
-        if (nextEvent->fromHour >= 0) {
-            if (nextEvent->toHour >= 0 && nextEvent->toHour != nextEvent->fromHour) {
-                // Time range
-                nextEventTime = formatEventTimeRange(nextEventStartTime, nextEventEndTime);
-            } else {
-                // Single time
-                nextEventTime = formatEventTime(nextEventStartTime);
-            }
-        } else {
-            nextEventTime = String("All day");
-        }
-        
-        String logTitle = nextEventTitle;
-        String logTime = nextEventTime;
-        
-        if (dataMutex != NULL) xSemaphoreGive(dataMutex);
-        
-        LOG_INFO("Next event found: " + logTitle + " on " + 
-                 String(nextEvent->month) + "-" + String(nextEvent->day) + 
-                 (nextEvent->fromHour >= 0 ? (" at " + logTime) : " (all day)") +
-                 " (in " + String(minDaysAhead) + " days)");
+
+    if (nextEvent == nullptr || minDaysAhead > MAX_DAYS_AHEAD) {
+        return;
     }
+
+    // Build the snapshot outside the lock, then publish it in one assignment.
+    CalendarSnapshot fresh;
+    fresh.hasEvent = true;
+    fresh.startTime = nextEventStartTimeValue;
+    fresh.endTime = nextEventEndTimeValue;
+
+    const bool hasBoardTitle =
+        nextEvent->boardTitle != nullptr && strlen(nextEvent->boardTitle) > 0;
+    storeText(fresh.title, sizeof(fresh.title),
+              String(hasBoardTitle ? nextEvent->boardTitle : nextEvent->title));
+
+    if (nextEvent->fromHour >= 0) {
+        const bool isRange =
+            nextEvent->toHour >= 0 && nextEvent->toHour != nextEvent->fromHour;
+        storeText(fresh.timeText, sizeof(fresh.timeText),
+                  isRange ? formatEventTimeRange(fresh.startTime, fresh.endTime)
+                          : formatEventTime(fresh.startTime));
+    } else {
+        storeText(fresh.timeText, sizeof(fresh.timeText), String("All day"));
+    }
+
+    {
+        DataLock lock;
+        data = fresh;
+    }
+
+    LOG_INFO("Next event found: " + String(fresh.title) + " on " +
+             String(nextEvent->month) + "-" + String(nextEvent->day) +
+             (nextEvent->fromHour >= 0 ? (" at " + String(fresh.timeText)) : " (all day)") +
+             " (in " + String(minDaysAhead) + " days)");
+}
+
+CalendarSnapshot CalendarManager::snapshot() const {
+    DataLock lock;
+    return data;
 }
 
 // Function to read calendar events from birthdays.h
 void CalendarManager::readCalendarEvents() {
     LOG_INFO_F("Reading calendar events from birthdays.h...");
-    
-    // Find next upcoming event
+
     findNextEvent();
-    
-    // Mark as updated
     markUpdated();
-    
-    if (hasEvent) {
-        LOG_INFO("Calendar event loaded: " + nextEventTitle);
+
+    const CalendarSnapshot s = snapshot();
+    if (s.hasEvent) {
+        LOG_INFO("Calendar event loaded: " + String(s.title));
     } else {
         LOG_INFO_F("No upcoming events found");
     }
@@ -241,113 +220,83 @@ void CalendarManager::readCalendarEvents() {
 
 // Check if event should be displayed now (once per 15 minutes)
 bool CalendarManager::shouldDisplayNow() const {
-    unsigned long currentTime = millis();
-    const unsigned long DISPLAY_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes in milliseconds
-    
-    // If never displayed or 15 minutes passed, display it
-    if (lastDisplayTime == 0 || (currentTime - lastDisplayTime >= DISPLAY_INTERVAL_MS)) {
-        return true;
-    }
-    
-    return false;
+    const unsigned long currentTime = millis();
+    return (lastDisplayTime == 0 || (currentTime - lastDisplayTime >= DISPLAY_INTERVAL_MS));
 }
 
 // Check if current event is active (within time range)
-bool CalendarManager::isEventActiveNow() const {
-    if (!hasEvent) {
+bool CalendarManager::isEventActiveNow(const CalendarSnapshot& s) const {
+    if (!s.hasEvent) {
         return false;
     }
-    
-    time_t now = timeClient.getEpochTime();
-    return (now >= nextEventStartTime && now <= nextEventEndTime);
+    const time_t now = currentEpoch();
+    return (now >= s.startTime && now <= s.endTime);
 }
 
 // Function to print next event on the screen
 void CalendarManager::printNextEventToScreen() const {
-    if (!hasEvent || nextEventTitle.length() == 0) {
-        String tape = "No events";
-        LOG_INFO(">> Display: Calendar = " + tape);
-        drawString(tape);
-        // Update last display time even for "No events"
+    const CalendarSnapshot s = snapshot();
+
+    if (!s.hasEvent || strlen(s.title) == 0) {
+        drawString(String("No events"));
         lastDisplayTime = millis();
         return;
     }
-    
-    // Check if event is today - only show events on the day of the event
-    time_t now = timeClient.getEpochTime();
+
+    // Only show events on the day of the event.
+    const time_t now = currentEpoch();
     struct tm timeinfoBuf;
     struct tm* timeinfo = gmtime_r(&now, &timeinfoBuf);
-    if (timeinfo == nullptr) {
-        Clock::getInstance().skipCurrentDisplay();
-        return;
-    }
-    
-    int currentMonth = timeinfo->tm_mon + 1;
-    int currentDay = timeinfo->tm_mday;
-    
-    // Get event date from stored start time
     struct tm eventTimeinfoBuf;
-    struct tm* eventTimeinfo = gmtime_r(&nextEventStartTime, &eventTimeinfoBuf);
-    if (eventTimeinfo == nullptr) {
-        Clock::getInstance().skipCurrentDisplay();
-        return;
-    }
-    
-    int eventMonth = eventTimeinfo->tm_mon + 1;
-    int eventDay = eventTimeinfo->tm_mday;
-    
-    bool isEventToday = (eventMonth == currentMonth && eventDay == currentDay);
-    
-    // Only show events that are today
-    if (!isEventToday) {
-        LOG_DEBUG("Event is not today (current: " + String(currentMonth) + "/" + String(currentDay) + 
-                  ", event: " + String(eventMonth) + "/" + String(eventDay) + "), skipping to next display");
-        Clock::getInstance().skipCurrentDisplay();
-        return;
-    }
-    
-    // Event is today - check if it's currently active (for timed events)
-    bool isActive = isEventActiveNow();
-    
-    LOG_DEBUG("Event is today, isActive=" + String(isActive ? "true" : "false"));
-    
-    // For timed events, only show when active. For all-day events, show all day
-    // Check if we should display now (once per 15 minutes)
-    // But always display if event is currently active (or if it's an all-day event)
-    if (!shouldDisplayNow() && !isActive) {
-        // Skip display, go to next
+    struct tm* eventTimeinfo = gmtime_r(&s.startTime, &eventTimeinfoBuf);
+    if (timeinfo == nullptr || eventTimeinfo == nullptr) {
         Clock::getInstance().skipCurrentDisplay();
         return;
     }
 
-    // Format: "Time Title" or "Title" for all-day events
+    const int currentMonth = timeinfo->tm_mon + 1;
+    const int currentDay = timeinfo->tm_mday;
+    const int eventMonth = eventTimeinfo->tm_mon + 1;
+    const int eventDay = eventTimeinfo->tm_mday;
+
+    if (eventMonth != currentMonth || eventDay != currentDay) {
+        LOG_DEBUG("Event is not today (current: " + String(currentMonth) + "/" + String(currentDay) +
+                  ", event: " + String(eventMonth) + "/" + String(eventDay) + "), skipping to next display");
+        Clock::getInstance().skipCurrentDisplay();
+        return;
+    }
+
+    const bool isActive = isEventActiveNow(s);
+    LOG_DEBUG("Event is today, isActive=" + String(isActive ? "true" : "false"));
+
+    // Timed events show while active; otherwise at most once per 15 minutes.
+    if (!shouldDisplayNow() && !isActive) {
+        Clock::getInstance().skipCurrentDisplay();
+        return;
+    }
+
+    const String title = String(s.title);
+    const String timeText = String(s.timeText);
     String tape;
-    
-    if (isActive) {
-        // Event is active now - show title prominently
-        tape = truncateEventTitle(nextEventTitle, 20);
-    } else if (nextEventTime.length() > 0 && nextEventTime != "All day") {
-        // Show time and truncated title
-        // Extract first time from range if it's a range
-        String shortTime = nextEventTime;
-        int spacePos = shortTime.indexOf(' ');
+
+    if (isActive || timeText.length() == 0 || timeText == "All day") {
+        tape = truncateEventTitle(title, 20);
+    } else {
+        // Show the start time plus a shortened title.
+        String shortTime = timeText;
+        const int spacePos = shortTime.indexOf(' ');
         if (spacePos > 0) {
-            shortTime = shortTime.substring(0, spacePos); // Take first part (start time)
+            shortTime = shortTime.substring(0, spacePos);
         }
         if (shortTime.length() > 5) {
             shortTime = shortTime.substring(0, 5); // Limit to HH:MM
         }
-        String shortTitle = truncateEventTitle(nextEventTitle, 15);
-        tape = shortTime + " " + shortTitle;
-    } else {
-        // Show only title
-        tape = truncateEventTitle(nextEventTitle, 20);
+        tape = shortTime + " " + truncateEventTitle(title, 15);
     }
-    
+
     LOG_INFO(">> Display: Calendar Event = " + tape + (isActive ? " (ACTIVE)" : ""));
     drawString(tape);
-    
-    // Update last display time
+
     lastDisplayTime = millis();
 }
 
@@ -380,47 +329,39 @@ String CalendarManager::formatEventTimeRange(time_t startTime, time_t endTime) c
 
 // Helper: Truncate event title to fit display
 String CalendarManager::truncateEventTitle(const String& title, int maxLength) const {
-    if (title.length() <= maxLength) {
-        return title;
-    }
-    return title.substring(0, maxLength - 3) + "...";
+    return TextUtils::truncate(title, maxLength);
 }
 
 // Check if calendar should be updated today
 bool CalendarManager::shouldUpdateToday() const {
-    // If never updated, always return true
     if (lastUpdateDay == -1) {
         return true;
     }
-    
-    // Check if time is valid before using it
-    time_t now = timeClient.getEpochTime();
+
+    const time_t now = currentEpoch();
     if (now < Timing::MIN_VALID_EPOCH) {
         LOG_DEBUG_F("Time not synchronized, will update calendar when time is available");
-        return true; // Update when time becomes available
+        return true;
     }
-    
+
     struct tm timeinfoBuf;
     struct tm* timeinfo = gmtime_r(&now, &timeinfoBuf);
     if (timeinfo == nullptr) {
         LOG_WARNING_F("Failed to get time info, will retry calendar update");
         return true;
     }
-    
-    int currentDay = timeinfo->tm_mday;
-    
-    // Update if day changed
-    return (lastUpdateDay != currentDay);
+
+    return (lastUpdateDay != timeinfo->tm_mday);
 }
 
 // Mark calendar as updated for today
 void CalendarManager::markUpdated() {
-    time_t now = timeClient.getEpochTime();
+    const time_t now = currentEpoch();
     if (now < Timing::MIN_VALID_EPOCH) {
         LOG_WARNING_F("Time not synchronized, cannot mark calendar as updated");
         return;
     }
-    
+
     struct tm timeinfoBuf;
     struct tm* timeinfo = gmtime_r(&now, &timeinfoBuf);
     if (timeinfo != nullptr) {

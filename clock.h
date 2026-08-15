@@ -7,9 +7,6 @@
 #include "weather_manager.h"
 #include "calendar_manager.h"
 #include "constants.h"
-#include <Ticker.h>
-
-// TIMER_INTERVAL_MS and DISPLAY_CYCLE_LENGTH moved to constants.h
 
 class Clock {
 public:
@@ -33,24 +30,18 @@ private:
 
   Dht22_manager dht22_manager;
 
-  void executeDisplayAction();
-  void buildDisplaySequence();
-  int findNextTimeIndex();
-
-  // Array of function pointers for display
   typedef void (Clock::*DisplayAction)();
 
-  // Appends one screen, refusing to write past the end of displaySequence.
-  void addDisplayAction(DisplayAction action);
-  // Appends the paired "time, then <screen>" the rotation is built from.
-  void addTimedDisplayAction(DisplayAction action);
+  void executeDisplayAction();
+  void buildDisplaySequence();
+  void addScreen(DisplayAction action);
 
   // Wrapper methods for display
   void displayTime();
   void displayDate();
   void displayDay();
   void displayWeather();
-  void displayMaxTemp();
+  void displayFeelsLike();
   void displayPressure();
   void displayWeatherHumidity();
   void displayWeatherDescription();
@@ -64,11 +55,16 @@ private:
   int currentDisplayIndex = 0;
   int lastDisplayedMinute = -1;     // Track last displayed minute
   unsigned long lastChangeTime = 0; // Track when last display change happened
+  bool showingTime = true;          // Rotation alternates time / data screen
 
   WeatherManager weatherManager;
   CurrencyManager currencyManager;
   CalendarManager calendarManager;
 
+  // Only the data screens are stored. The rotation shows the clock between
+  // every one of them, so interleaving displayTime into this table (which is
+  // what it used to do) would double its size and force findNextTimeIndex()
+  // to search for slots that are really just "every other entry".
   DisplayAction displaySequence[Display::MAX_SEQUENCE_LENGTH];
   int displaySequenceLength = 0;
 };

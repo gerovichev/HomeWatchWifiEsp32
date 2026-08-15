@@ -1,12 +1,8 @@
 #include "TimeManager.h"
-#include "secure_client.h"
 #include "constants.h"
 #include "logger.h"
-#include "error_handler.h"
-#include <freertos/FreeRTOS.h>
-#include <freertos/semphr.h>
-
-extern SemaphoreHandle_t dataMutex;
+#include "http_fetch.h"
+#include "data_lock.h"
 
 WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP);
@@ -45,91 +41,71 @@ void getTimezone() {
   LOG_DEBUG("Timezone API request for lat=" + String(latitude, 2) +
             ", lon=" + String(longitude, 2));
 
-  int attempts = 0;
-  bool success = false;
+  HttpFetchOptions opts;
+  opts.url = path;
+  opts.tag = "timezonedb.com";
+  opts.timeoutMs = Timing::HTTP_TIMEOUT_MS;
+  opts.maxAttempts = maxAttemptsTimes;
 
-  while (attempts < maxAttemptsTimes && !success) {
-    // A fresh client per attempt: mbedTLS state is not reusable after a failed
-    // handshake, so retrying on the same WiFiClientSecure just fails again.
-    WiFiClientSecure client;
-    setupSecureClient(client, "timezonedb.com");
-    HTTPClient http;
-    http.setTimeout(Timing::HTTP_TIMEOUT_MS);
-
-    if (http.begin(client, path)) {
-      LOG_DEBUG("Timezone API attempt " + String(attempts + 1) + "/" + String(maxAttemptsTimes));
-      int httpCode = http.GET();  // Send the request
-
-      if (httpCode == HTTP_CODE_OK) {
-        String payload = http.getString();
-        LOG_VERBOSE("Timezone API response: " + payload);
-
-        JsonDocument doc;  // Timezone API response: status, offset, zoneStart, zoneEnd, cityName
-        DeserializationError error = deserializeJson(doc, payload);
-        if (!error) {
-          LOG_VERBOSE_F("Timezone JSON deserialization succeeded");
-          JsonObject root = doc.as<JsonObject>();
-
-          // `| ""` matters: an error envelope with no "status" key yields a
-          // null const char*, and strcmp() on that faults.
-          const char* status = root["status"] | "";
-          if (strcmp(status, "OK") == 0) {
-            const int newOffset = root["gmtOffset"] | 0;
-            const time_t newZoneStart = static_cast<time_t>(root["zoneStart"] | 0L);
-            const time_t newZoneEnd = static_cast<time_t>(root["zoneEnd"] | 0L);
-            String newCityName = String(root["cityName"] | "");
-
-            // printTimeToScreen() reads timeClient from the display core, so
-            // the offset change and its bookkeeping go in one critical section.
-            if (dataMutex != NULL) xSemaphoreTake(dataMutex, portMAX_DELAY);
-            offset = newOffset;
-            timeClient.setTimeOffset(newOffset);
-            zoneStart = newZoneStart;
-            zoneEnd = newZoneEnd;
-            city_name = newCityName;
-            if (dataMutex != NULL) xSemaphoreGive(dataMutex);
-
-            LOG_INFO("Timezone updated: " + newCityName + " (UTC" + String(newOffset >= 0 ? "+" : "") + String(newOffset/3600) + ")");
-            LOG_DEBUG("GMT offset: " + String(newOffset) + " seconds");
-
-            success = true;
-          } else {
-            LOG_WARNING("Timezone API returned status: " + String(status));
-          }
-        } else {
-          LOG_ERROR("Timezone JSON deserialization failed: " + String(error.c_str()));
-        }
-      } else {
-        LOG_WARNING("Timezone API HTTP error: " + String(httpCode));
-      }
-    } else {
-      LOG_ERROR_F("Failed to begin timezone HTTP connection");
+  httpFetchWithRetry(opts, [](const String &payload) {
+    JsonDocument doc;  // Timezone API response: status, offset, zoneStart, zoneEnd, cityName
+    DeserializationError error = deserializeJson(doc, payload);
+    if (error) {
+      LOG_ERROR("Timezone JSON deserialization failed: " + String(error.c_str()));
+      return false;
     }
 
-    http.end();
+    JsonObject root = doc.as<JsonObject>();
 
-    if (!success) {
-      attempts++;
-      if (attempts < maxAttemptsTimes) {
-        LOG_WARNING("Retrying timezone request (" + String(attempts) + "/" + String(maxAttemptsTimes) + ")...");
-        delay(Timing::RETRY_DELAY_MS);
-      } else {
-        ErrorHandler::handleError(ErrorHandler::ERROR_API,
-                                  "Timezone fetch failed after " + String(maxAttemptsTimes) +
-                                      " attempts, keeping current offset",
-                                  attempts, maxAttemptsTimes);
-      }
+    // `| ""` matters: an error envelope with no "status" key yields a
+    // null const char*, and strcmp() on that faults.
+    const char *status = root["status"] | "";
+    if (strcmp(status, "OK") != 0) {
+      LOG_WARNING("Timezone API returned status: " + String(status));
+      return false;
     }
-  }
+
+    const int newOffset = root["gmtOffset"] | 0;
+    const time_t newZoneStart = static_cast<time_t>(root["zoneStart"] | 0L);
+    const time_t newZoneEnd = static_cast<time_t>(root["zoneEnd"] | 0L);
+    String newCityName = String(root["cityName"] | "");
+
+    {
+      // printTimeToScreen() reads timeClient from the display core, so the
+      // offset change and its bookkeeping go in one critical section.
+      DataLock lock;
+      offset = newOffset;
+      timeClient.setTimeOffset(newOffset);
+      zoneStart = newZoneStart;
+      zoneEnd = newZoneEnd;
+      city_name = newCityName;
+    }
+
+    LOG_INFO("Timezone updated: " + newCityName + " (UTC" + String(newOffset >= 0 ? "+" : "") + String(newOffset/3600) + ")");
+    LOG_DEBUG("GMT offset: " + String(newOffset) + " seconds");
+    return true;
+  });
+}
+
+// The three screens below all read timeClient, which getTimezone() mutates from
+// the network core. Each takes the lock only for the read, then formats and
+// draws outside the critical section.
+time_t currentEpoch() {
+  DataLock lock;
+  return timeClient.getEpochTime();
 }
 
 void printTimeToScreen() {
-  String tape = timeClient.getFormattedTime().substring(0, 5);
-  drawString(tape);
+  String formatted;
+  {
+    DataLock lock;
+    formatted = timeClient.getFormattedTime();
+  }
+  drawString(formatted.substring(0, 5));
 }
 
 void printDateToScreen() {
-  time_t epochTime = timeClient.getEpochTime();
+  time_t epochTime = currentEpoch();
   struct tm timeBuf;
   struct tm* ptm = gmtime_r(&epochTime, &timeBuf);
   if (ptm == nullptr) {
@@ -141,8 +117,16 @@ void printDateToScreen() {
 }
 
 void printDayToScreen() {
-  String tape = daysOfTheWeek[timeClient.getDay()];
-  drawString(tape);
+  int dayIndex;
+  {
+    DataLock lock;
+    dayIndex = timeClient.getDay();
+  }
+  if (dayIndex < 0 || dayIndex > 6) {
+    LOG_WARNING("Day index out of range: " + String(dayIndex));
+    return;
+  }
+  drawString(daysOfTheWeek[dayIndex]);
 }
 
 void printCityToScreen() {

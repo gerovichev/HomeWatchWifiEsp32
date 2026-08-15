@@ -35,6 +35,12 @@ public:
     void debug(const __FlashStringHelper* message);
     void verbose(const __FlashStringHelper* message);
 
+    // printf-style variant. Formats into a stack buffer, so a call below the
+    // active level costs nothing and one above it allocates no Strings - the
+    // "..." + String(x) + "..." idiom costs several heap operations per call,
+    // which is what fragments the heap on a device that runs for months.
+    void logf(LogLevel level, const char* format, ...) __attribute__((format(printf, 3, 4)));
+
 private:
     Logger() : logLevel(LOG_LEVEL_INFO), isInitialized(false), serialMutex(nullptr) {}
     Logger(const Logger&) = delete;
@@ -42,6 +48,7 @@ private:
 
     void log(LogLevel level, const String& message);
     void logFlash(LogLevel level, const __FlashStringHelper* message);
+    void writeRecord(LogLevel level, const char* message);
     const char* getLevelString(LogLevel level);
 
     LogLevel logLevel;
@@ -65,5 +72,13 @@ private:
 #define LOG_INFO_F(msg) Logger::getInstance().info(F(msg))
 #define LOG_DEBUG_F(msg) Logger::getInstance().debug(F(msg))
 #define LOG_VERBOSE_F(msg) Logger::getInstance().verbose(F(msg))
+
+// printf-style macros - preferred over string concatenation when interpolating
+// values, e.g. LOG_DEBUGF("attempt %d/%d", n, max).
+#define LOG_ERRORF(fmt, ...) Logger::getInstance().logf(LOG_LEVEL_ERROR, fmt, ##__VA_ARGS__)
+#define LOG_WARNINGF(fmt, ...) Logger::getInstance().logf(LOG_LEVEL_WARNING, fmt, ##__VA_ARGS__)
+#define LOG_INFOF(fmt, ...) Logger::getInstance().logf(LOG_LEVEL_INFO, fmt, ##__VA_ARGS__)
+#define LOG_DEBUGF(fmt, ...) Logger::getInstance().logf(LOG_LEVEL_DEBUG, fmt, ##__VA_ARGS__)
+#define LOG_VERBOSEF(fmt, ...) Logger::getInstance().logf(LOG_LEVEL_VERBOSE, fmt, ##__VA_ARGS__)
 
 #endif // LOGGER_H

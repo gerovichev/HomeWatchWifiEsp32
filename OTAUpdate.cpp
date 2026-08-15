@@ -2,6 +2,7 @@
 #include "constants.h"
 #include "logger.h"
 #include "secure_client.h"
+#include "device_state.h"
 
 // Global variable definition
 String pathOta;
@@ -47,12 +48,15 @@ void update_error(int err) {
 // init because `ip` is refreshed by location_init() on every data cycle, and a
 // URL built at boot would keep reporting a stale address forever.
 static void buildOtaPath() {
+  const DeviceState &device = DeviceState::getInstance();
+  const String &mac = device.getMacAddress();
+  const String &host = device.getHostname();
+
   pathOta = "";
-  pathOta.reserve(strlen(webOTA_updateURL) + macAddrSt.length() +
-                  hostname_m.length() + ip.length() + version_prg.length() +
-                  50);
-  pathOta = String(webOTA_updateURL) + F("?MAC=") + macAddrSt + F("&hst=") +
-            hostname_m + F("&ip=") + ip + F("&ver=") + version_prg;
+  pathOta.reserve(strlen(webOTA_updateURL) + mac.length() + host.length() +
+                  ip.length() + version_prg.length() + 50);
+  pathOta = String(webOTA_updateURL) + F("?MAC=") + mac + F("&hst=") + host +
+            F("&ip=") + ip + F("&ver=") + version_prg;
 }
 
 // OTA initialization

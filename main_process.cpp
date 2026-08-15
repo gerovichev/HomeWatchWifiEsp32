@@ -1,10 +1,12 @@
 #include "main_process.h"
 #include "device_state.h"
 #include "calendar_manager.h"
+#include "data_lock.h"
 
 #include "constants.h"
 #include <WiFi.h>
 #include <TimeLib.h> // For advanced time manipulation
+#include <esp_task_wdt.h>
 
 SemaphoreHandle_t dataMutex = NULL;
 
@@ -15,10 +17,43 @@ static unsigned long lastWiFiCheck = 0;
 // slightly larger API response cannot overflow it.
 constexpr uint32_t DATA_TASK_STACK_BYTES = 12288;
 
+// The task feeds the watchdog between each step of a cycle, so this bounds a
+// single step rather than the whole cycle. The longest legitimate step is an
+// actual OTA firmware download; everything else is a fetch that gives up after
+// three attempts (~20s). Generous on purpose - a watchdog that fires on a slow
+// network is worse than none.
+constexpr uint32_t TASK_WDT_TIMEOUT_MS = 180000;
+
+// The IDF already brings the TWDT up before app_main under the default Arduino
+// config, so reconfigure is the normal path here. Calling init() first would
+// also work but logs an "already initialized" error on every boot.
+//
+// idle_core_mask is cleared deliberately: the timeout has to cover a worst-case
+// network cycle, and at that length idle-task starvation detection is
+// meaningless anyway. What this watchdog is for is a wedged socket in
+// dataUpdateTask.
+static void setupTaskWatchdog() {
+  esp_task_wdt_config_t wdtConfig = {};
+  wdtConfig.timeout_ms = TASK_WDT_TIMEOUT_MS;
+  wdtConfig.idle_core_mask = 0;
+  wdtConfig.trigger_panic = true;
+
+  esp_err_t err = esp_task_wdt_reconfigure(&wdtConfig);
+  if (err == ESP_ERR_INVALID_STATE) {
+    err = esp_task_wdt_init(&wdtConfig);
+  }
+
+  if (err == ESP_OK) {
+    LOG_INFOF("Task watchdog armed at %lus", (unsigned long)(TASK_WDT_TIMEOUT_MS / 1000));
+  } else {
+    LOG_WARNINGF("Task watchdog setup failed: %s", esp_err_to_name(err));
+  }
+}
+
 // Setup function, called once at startup
 void setup() {
   Logger::getInstance().begin(115200);
-  Logger::getInstance().setLogLevel(LOG_LEVEL_DEBUG); // Set desired log level
+  Logger::getInstance().setLogLevel(LOG_LEVEL_NONE); // Set desired log level
 
   LOG_INFO_F("Starting HomeWatchWifi ESP32...");
   LOG_INFO("Version: " + version_prg);
@@ -78,6 +113,8 @@ void setup() {
 
   // printCityToScreen();  // Display the city
 
+  setupTaskWatchdog();
+
   dataMutex = xSemaphoreCreateMutex();
   if (dataMutex != NULL) {
     // Start data update task on Core 0
@@ -102,7 +139,20 @@ void setup() {
 // Background task to fetch weather and currency data
 void dataUpdateTask(void *pvParameters) {
   while (true) {
+    // Subscribe for the working part of the cycle only, and unsubscribe before
+    // the long sleep below. Staying subscribed across a DATA_UPDATE_INTERVAL_SEC
+    // (20 min) vTaskDelay guarantees the watchdog fires on a completely healthy
+    // device, because a sleeping task never feeds it - a sleeping task is not a
+    // hung task, so it should not be watched at all.
+    const bool watched = (esp_task_wdt_add(NULL) == ESP_OK);
+    if (!watched) {
+      LOG_WARNING_F("Could not register dataUpdateTask with the task watchdog");
+    }
+
     LOG_INFO_F("Starting data update cycle...");
+
+    // Sensor I/O belongs here on the data core, not in the display path.
+    Clock::getInstance().getDht22().refresh();
 
     if (WiFi.status() == WL_CONNECTED) {
       LOG_DEBUG_F("WiFi connected, updating services...");
@@ -111,9 +161,11 @@ void dataUpdateTask(void *pvParameters) {
         LOG_DEBUG_F("Checking for OTA updates...");
         update_ota(); // Handle OTA updates
       }
+      esp_task_wdt_reset();
 
       LOG_DEBUG_F("Updating location...");
       location_init();
+      esp_task_wdt_reset();
 
       if (DeviceState::getInstance().isMqttEnabled()) {
         if (!client.connected()) {
@@ -124,27 +176,32 @@ void dataUpdateTask(void *pvParameters) {
         LOG_DEBUG_F("Publishing temperature to MQTT...");
         publish_temperature(); // Publish temperature to MQTT
       }
+      esp_task_wdt_reset();
 
       LOG_DEBUG_F("Updating time from NTP...");
       timeClient.update(); // Update the time from NTP server
-      if (dataMutex != NULL) xSemaphoreTake(dataMutex, portMAX_DELAY);
-      timeNow = timeClient.getEpochTime();
-      setTime(timeNow);
-      if (dataMutex != NULL) xSemaphoreGive(dataMutex);
+      {
+        DataLock lock;
+        timeNow = timeClient.getEpochTime();
+        setTime(timeNow);
+      }
       LOG_VERBOSE("Current epoch time: " + String(timeNow));
 
       LOG_DEBUG_F("Updating timezone...");
       getTimezone(); // Update timezone info
+      esp_task_wdt_reset();
 
       LOG_DEBUG_F("Fetching weather data...");
       Clock::getInstance()
           .getWeatherManager()
           .readWeather(); // Fetch weather data
+      esp_task_wdt_reset();
 
       LOG_DEBUG_F("Fetching currency rates...");
       Clock::getInstance()
           .getCurrencyManager()
           .initialize(); // Initialize currency data
+      esp_task_wdt_reset();
 
       LOG_DEBUG_F("Updating calendar events...");
       CalendarManager &calendarManager = Clock::getInstance().getCalendarManager();
@@ -156,10 +213,22 @@ void dataUpdateTask(void *pvParameters) {
       // setIntensityByTime() there.
 
       LOG_INFO_F("Data update cycle completed successfully");
-      LOG_DEBUG("DataUpdate stack headroom: " +
-                String(uxTaskGetStackHighWaterMark(NULL)) + " bytes");
     } else {
       LOG_ERROR_F("WiFi not connected, skipping data update");
+    }
+
+    // Stack headroom catches a creeping overflow; free/largest-block together
+    // distinguish a genuine leak from heap fragmentation, which is the failure
+    // mode for a device that builds Strings and runs for months.
+    LOG_INFOF("Health: stack %uB free, heap %uB free, largest block %uB, uptime %lus",
+              (unsigned)uxTaskGetStackHighWaterMark(NULL),
+              (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap(),
+              millis() / 1000);
+
+    // Leave the watchdog's view before sleeping - see the note at the top of
+    // the loop.
+    if (watched) {
+      esp_task_wdt_delete(NULL);
     }
 
     // Wait for the next update interval
@@ -190,15 +259,14 @@ void loop() {
     // timeNow/sunrise/sunset are 64-bit and written by dataUpdateTask on core 0,
     // so a bare read here can tear or catch sunrise mid-timezone-adjustment.
     // Snapshot them under the mutex, then work from the local copies.
-    time_t nowSnapshot = timeNow;
-    time_t sunriseSnapshot = sunrise;
-    time_t sunsetSnapshot = sunset;
-    if (dataMutex != NULL &&
-        xSemaphoreTake(dataMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+    time_t nowSnapshot;
+    time_t sunriseSnapshot;
+    time_t sunsetSnapshot;
+    {
+      DataLock lock;
       nowSnapshot = timeNow;
       sunriseSnapshot = sunrise;
       sunsetSnapshot = sunset;
-      xSemaphoreGive(dataMutex);
     }
     setIntensityByTime(nowSnapshot, sunriseSnapshot, sunsetSnapshot);
 

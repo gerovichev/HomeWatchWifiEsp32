@@ -1,6 +1,7 @@
 #include "led_display.h"
 #include "constants.h"
 #include "logger.h"
+#include "text_utils.h"
 
 // Global variables
 bool newMessageAvailable = false;
@@ -54,39 +55,10 @@ void setIntensityByTime(time_t nowEpoch, time_t sunriseEpoch,
   M.setIntensity(intensity);
 }
 
-// Converts UTF-8 to Russian characters
+// Converts UTF-8 to Russian characters. The transform itself lives in
+// TextUtils so it can be tested without a board.
 String utf2rus(const String &source) {
-  String target;
-  target.reserve(source.length());
-
-  for (int i = 0, k = source.length(); i < k; ++i) {
-    unsigned char n = source[i];
-    if (n >= 0xC0) {
-      switch (n) {
-      case 0xD0: {
-        n = source[++i];
-        if (n == 0x81) {
-          n = 0xA8;
-        } else if (n >= 0x90 && n <= 0xBF) {
-          n += 0x30;
-        }
-        break;
-      }
-      case 0xD1: {
-        n = source[++i];
-        if (n == 0x91) {
-          n = 0xB8;
-        } else if (n >= 0x80 && n <= 0x8F) {
-          n += 0x70;
-        }
-        break;
-      }
-      }
-    }
-    target += char(n);
-  }
-
-  return target;
+  return TextUtils::utf8ToDisplayCodepage(source);
 }
 
 // Draws a string on the LED display

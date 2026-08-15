@@ -1,12 +1,9 @@
 #include "location_manager.h"
 #include "constants.h"
 #include "logger.h"
-#include "error_handler.h"
-#include "secure_client.h"
+#include "http_fetch.h"
 #include <ArduinoJson.h>
-#include <HTTPClient.h>
 #include <LittleFS.h>
-#include <WiFiClientSecure.h>
 #include <WifiLocation.h>
 
 // Define global variables
@@ -161,65 +158,33 @@ bool getLocationAPI(const String &ip) {
 String getIp() {
   LOG_INFO_F("Fetching external IP address...");
 
-  String payload;
-  const char *path = "https://api.ipify.org";
-  int attempts = 0;
-  bool success = false;
-  int maxAttemptsLoc = Retry::MAX_ATTEMPTS_LOCATION;
+  String result;
 
-  while (attempts < maxAttemptsLoc && !success) {
-    // A fresh client per attempt: mbedTLS state is not reusable after a failed
-    // handshake, so retrying on the same WiFiClientSecure just fails again.
-    WiFiClientSecure client;
-    setupSecureClient(client, "ipify.org");
-    HTTPClient http;
-    http.setTimeout(Timing::HTTP_TIMEOUT_MS);
+  HttpFetchOptions opts;
+  opts.url = "https://api.ipify.org";
+  opts.tag = "ipify.org";
+  opts.timeoutMs = Timing::HTTP_TIMEOUT_MS;
+  opts.maxAttempts = Retry::MAX_ATTEMPTS_LOCATION;
 
-    if (http.begin(client, path)) {
-      LOG_DEBUG("IP retrieval attempt " + String(attempts + 1) + "/" +
-                String(maxAttemptsLoc));
-      int httpCode = http.GET(); // Send the request
-
-      if (httpCode == HTTP_CODE_OK) {
-        payload = http.getString(); // Get the response payload
-        payload.trim();
-        // A 200 with an empty body is still a failed lookup - treating it as
-        // success would propagate an empty ip into the location cache.
-        if (payload.length() > 0) {
-          LOG_INFO("External IP retrieved: " + payload);
-          success = true;
-        } else {
-          LOG_WARNING_F("External IP response was empty");
-        }
-      } else {
-        LOG_WARNING("IP retrieval HTTP error: " + String(httpCode));
-      }
-
-      http.end();
-    } else {
-      LOG_ERROR_F("Failed to begin IP retrieval HTTP connection");
+  // Note: a failed lookup never restarts the device - latitude/longitude carry
+  // sane built-in defaults, so this degrades to slightly-off weather rather
+  // than a reboot loop while the network is down. location_init() handles the
+  // empty return.
+  httpFetchWithRetry(opts, [&result](const String &payload) {
+    String candidate = payload;
+    candidate.trim();
+    // A 200 with an empty body is still a failed lookup - treating it as
+    // success would propagate an empty ip into the location cache.
+    if (candidate.length() == 0) {
+      LOG_WARNING_F("External IP response was empty");
+      return false;
     }
+    result = candidate;
+    LOG_INFO("External IP retrieved: " + result);
+    return true;
+  });
 
-    if (!success) {
-      attempts++;
-      if (attempts < maxAttemptsLoc) {
-        LOG_WARNING("Retrying IP retrieval (" + String(attempts) + "/" +
-                    String(maxAttemptsLoc) + ")...");
-        delay(Timing::RETRY_DELAY_MS);
-      } else {
-        // Never restart here: latitude/longitude carry sane built-in defaults,
-        // so a failed lookup degrades to slightly-off weather rather than
-        // justifying a reboot loop while the network is down. location_init()
-        // handles the empty return.
-        ErrorHandler::handleError(ErrorHandler::ERROR_NETWORK,
-                                  "External IP lookup failed after " +
-                                      String(maxAttemptsLoc) + " attempts",
-                                  attempts, maxAttemptsLoc);
-      }
-    }
-  }
-
-  return payload;
+  return result;
 }
 
 // Initialize location by loading config or calling API

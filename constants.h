@@ -6,7 +6,6 @@
 namespace Timing {
     constexpr int CLOCK_INTERVAL_SEC = 6;
     constexpr int DATA_UPDATE_INTERVAL_SEC = 1200;  // 15 minutes
-    constexpr int WIFI_TIMEOUT_MS = 10000;
     constexpr int HTTP_TIMEOUT_MS = 1500;
     constexpr int HTTP_TIMEOUT_CURRENCY_MS = 3000;
     constexpr int OTA_CLIENT_TIMEOUT_MS = 15000;
@@ -35,26 +34,22 @@ namespace Retry {
 namespace Display {
     constexpr int SCROLL_SPEED_MS = 50;
     constexpr int PAUSE_TIME_MS = 1000;
-    constexpr int DISPLAY_CYCLE_LENGTH = 21;
     constexpr int INTENSITY_DAY = 2;
     constexpr int INTENSITY_NIGHT = 0;
 
-    // Capacity of Clock::displaySequence. Headroom above the 26 entries the
-    // fully-featured build currently emits, so adding a screen does not
-    // silently overrun the array (buildDisplaySequence() also bounds-checks).
-    constexpr int MAX_SEQUENCE_LENGTH = 40;
+    // Capacity of Clock::displaySequence, which now holds only the data
+    // screens (13 in the fully-featured build) - the clock is interleaved by
+    // the rotation itself. buildDisplaySequence() also bounds-checks.
+    constexpr int MAX_SEQUENCE_LENGTH = 24;
 }
 
 // Buffer sizes
 namespace Buffer {
     constexpr size_t LED_BUFFER_SIZE = 512;
-    constexpr size_t JSON_WEATHER_SIZE = 1024;
-    constexpr size_t JSON_TIMEZONE_SIZE = 512;
-    constexpr size_t JSON_CURRENCY_SIZE = 1536;
-    constexpr size_t JSON_LOCATION_SIZE = 256;
     constexpr size_t PATH_BUFFER_SIZE = 512;
     constexpr size_t TIME_STRING_SIZE = 20;
     constexpr size_t TEMP_STRING_SIZE = 8;
+    constexpr size_t LOG_BUFFER_SIZE = 192;  // printf-style logging scratch space
 }
 
 // Sensor constants

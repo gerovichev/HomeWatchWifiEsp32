@@ -1,5 +1,6 @@
 #include "logger.h"
 #include "constants.h"
+#include <stdarg.h>
 
 Logger& Logger::getInstance() {
     static Logger instance;
@@ -36,11 +37,9 @@ const char* Logger::getLevelString(LogLevel level) {
     }
 }
 
-void Logger::log(LogLevel level, const String& message) {
-    if (!isInitialized || !Serial || level > logLevel) {
-        return;
-    }
-    
+// Emits one already-formatted record. log() and logf() both funnel through
+// here so the mutex discipline lives in exactly one place.
+void Logger::writeRecord(LogLevel level, const char* message) {
     // Print timestamp (milliseconds since start)
     char timeStr[12];
     snprintf(timeStr, sizeof(timeStr), "%10lu", millis());
@@ -61,6 +60,42 @@ void Logger::log(LogLevel level, const String& message) {
     if (locked) {
         xSemaphoreGive(serialMutex);
     }
+}
+
+void Logger::log(LogLevel level, const String& message) {
+    if (!isInitialized || !Serial || level > logLevel) {
+        return;
+    }
+    writeRecord(level, message.c_str());
+}
+
+void Logger::logf(LogLevel level, const char* format, ...) {
+    // Level check first: a filtered-out call must not pay for formatting.
+    if (!isInitialized || !Serial || level > logLevel) {
+        return;
+    }
+
+    char buffer[Buffer::LOG_BUFFER_SIZE];
+    va_list args;
+    va_start(args, format);
+    const int written = vsnprintf(buffer, sizeof(buffer), format, args);
+    va_end(args);
+
+    if (written < 0) {
+        writeRecord(LOG_LEVEL_ERROR, "log formatting failed");
+        return;
+    }
+
+    // vsnprintf truncates rather than overflowing; mark it so a clipped record
+    // is not mistaken for the whole story.
+    if (static_cast<size_t>(written) >= sizeof(buffer)) {
+        buffer[sizeof(buffer) - 4] = '.';
+        buffer[sizeof(buffer) - 3] = '.';
+        buffer[sizeof(buffer) - 2] = '.';
+        buffer[sizeof(buffer) - 1] = '\0';
+    }
+
+    writeRecord(level, buffer);
 }
 
 void Logger::error(const String& message) {

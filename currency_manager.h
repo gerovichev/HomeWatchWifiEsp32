@@ -1,9 +1,6 @@
 #pragma once
 
 #include "global_config.h"
-#include <ArduinoJson.h>
-#include <HTTPClient.h>
-#include <WiFiClientSecure.h>
 
 class CurrencyManager {
 public:
@@ -12,12 +9,9 @@ public:
   void initialize();
   void displayUSDToScreen();
   void displayEURToScreen();
-
   void displayBTCToScreen();
 
 private:
-  // HTTP_TIMEOUT moved to constants.h as Timing::HTTP_TIMEOUT_CURRENCY_MS
-
   // Using const char* directly to avoid String copies in RAM
   const char *bearerTokenCurrency;
   const char *bearerTokenCrypto;
@@ -29,6 +23,10 @@ private:
   float dataEURValue;
   float dataBTCValue;
 
-  float readCurrency(const char *path);
-  float readCrypto(const char *path);
+  void fetchInto(const char *path, const char *token,
+                 float (*parseFn)(const String &), const char *label,
+                 float &target);
+
+  // Reads one rate under dataMutex; the values are written from the other core.
+  float valueOf(const float &field) const;
 };

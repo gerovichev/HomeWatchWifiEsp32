@@ -15,6 +15,7 @@ Clock &Clock::getInstance() {
 void Clock::init() {
   buildDisplaySequence();   // Build display sequence
   currentDisplayIndex = 0;  // Reset index
+  showingTime = true;       // Rotation always opens on the clock
   lastDisplayedMinute = -1; // Initialize minute tracking
   lastChangeTime = millis();
 }
@@ -30,38 +31,40 @@ void Clock::loop() {
   // Check if animation is finished (returns true if done)
   // We only proceed if BOTH time has expired AND animation is done
   if (timeExpired && displayAnimate()) {
-
-    // Move to next element or start from beginning
-    currentDisplayIndex++;
-    if (currentDisplayIndex >= displaySequenceLength) {
-      currentDisplayIndex = 0;
-      LOG_VERBOSE_F("Display cycle completed, restarting");
+    // Alternate clock / data screen; advance to the next data screen only
+    // after its clock slot has been shown.
+    if (showingTime) {
+      showingTime = false;
+    } else {
+      showingTime = true;
+      currentDisplayIndex++;
+      if (currentDisplayIndex >= displaySequenceLength) {
+        currentDisplayIndex = 0;
+        LOG_VERBOSE_F("Display cycle completed, restarting");
+      }
     }
 
-    // Execute current action from sequence
-    if (displaySequenceLength > 0) {
-      lastChangeTime = currentTime; // Reset timer before execution
-      executeDisplayAction();       // Action might override lastChangeTime via skipCurrentDisplay
-    }
+    lastChangeTime = currentTime; // Reset timer before execution
+    executeDisplayAction();       // Action might override lastChangeTime via skipCurrentDisplay
   }
 }
 
-#include "main_process.h"
-
-// Executes current action from sequence
+// Executes current action from sequence.
+//
+// Deliberately takes no lock: each display action reads a snapshot of the data
+// it needs under dataMutex internally and formats/draws outside the critical
+// section. Locking here instead would hold the mutex across the whole render -
+// including String building and, before DHT reads moved to the data task, a
+// blocking sensor read - and stall the network core on the other side.
 void Clock::executeDisplayAction() {
+  if (showingTime) {
+    displayTime();
+    return;
+  }
+
   if (currentDisplayIndex < displaySequenceLength &&
       displaySequence[currentDisplayIndex] != nullptr) {
-    if (dataMutex != NULL) {
-      if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-        (this->*displaySequence[currentDisplayIndex])();
-        xSemaphoreGive(dataMutex);
-      } else {
-        LOG_WARNING_F("Failed to lock data mutex for display action");
-      }
-    } else {
-      (this->*displaySequence[currentDisplayIndex])();
-    }
+    (this->*displaySequence[currentDisplayIndex])();
   }
 }
 
@@ -70,7 +73,7 @@ void Clock::displayTime() { printTimeToScreen(); }
 void Clock::displayDate() { printDateToScreen(); }
 void Clock::displayDay() { printDayToScreen(); }
 void Clock::displayWeather() { weatherManager.printWeatherToScreen(); }
-void Clock::displayMaxTemp() { weatherManager.printFeelsLikeToScreen(); }
+void Clock::displayFeelsLike() { weatherManager.printFeelsLikeToScreen(); }
 void Clock::displayPressure() { weatherManager.printPressureToScreen(); }
 void Clock::displayWeatherHumidity() { weatherManager.printHumidityToScreen(); }
 void Clock::displayWeatherDescription() {
@@ -83,9 +86,9 @@ void Clock::displayHomeTemp() { dht22_manager.printHomeTemp(); }
 void Clock::displayHomeHumidity() { dht22_manager.printHumidity(); }
 void Clock::displayCalendar() { calendarManager.printNextEventToScreen(); }
 
-// Appends one screen, dropping it (loudly) rather than running off the end of
-// the fixed-size array.
-void Clock::addDisplayAction(DisplayAction action) {
+// Appends one data screen, dropping it (loudly) rather than running off the
+// end of the fixed-size array.
+void Clock::addScreen(DisplayAction action) {
   if (displaySequenceLength >= Display::MAX_SEQUENCE_LENGTH) {
     LOG_ERROR_F("Display sequence full, screen dropped - raise Display::MAX_SEQUENCE_LENGTH");
     return;
@@ -93,48 +96,37 @@ void Clock::addDisplayAction(DisplayAction action) {
   displaySequence[displaySequenceLength++] = action;
 }
 
-// The rotation alternates time with each data screen, so screens are added in
-// pairs.
-void Clock::addTimedDisplayAction(DisplayAction action) {
-  addDisplayAction(&Clock::displayTime);
-  addDisplayAction(action);
-}
-
 // Builds display sequence based on available data
 void Clock::buildDisplaySequence() {
   displaySequenceLength = 0;
 
-  // Always show time and date
-  addDisplayAction(&Clock::displayTime);
-  addDisplayAction(&Clock::displayDate);
-  addTimedDisplayAction(&Clock::displayDay);
+  addScreen(&Clock::displayDate);
+  addScreen(&Clock::displayDay);
 
   // Weather - skipped entirely on devices configured without it, so they do
   // not rotate through five screens of never-populated data.
   if (DeviceState::getInstance().isReadWeather()) {
-    addTimedDisplayAction(&Clock::displayWeather);
-    addTimedDisplayAction(&Clock::displayMaxTemp);
-    addTimedDisplayAction(&Clock::displayPressure);
-    addTimedDisplayAction(&Clock::displayWeatherHumidity);
-    addTimedDisplayAction(&Clock::displayWeatherDescription);
+    addScreen(&Clock::displayWeather);
+    addScreen(&Clock::displayFeelsLike);
+    addScreen(&Clock::displayPressure);
+    addScreen(&Clock::displayWeatherHumidity);
+    addScreen(&Clock::displayWeatherDescription);
   }
 
-  // Currency
-  addTimedDisplayAction(&Clock::displayUSD);
-  addTimedDisplayAction(&Clock::displayEUR);
-  addTimedDisplayAction(&Clock::displayBTC);
+  addScreen(&Clock::displayUSD);
+  addScreen(&Clock::displayEUR);
+  addScreen(&Clock::displayBTC);
 
   // Home sensors (only if connected)
-  if (IS_DHT_CONNECTED) {
-    addTimedDisplayAction(&Clock::displayHomeTemp);
-    addTimedDisplayAction(&Clock::displayHomeHumidity);
+  if (DeviceState::getInstance().isDhtConnected()) {
+    addScreen(&Clock::displayHomeTemp);
+    addScreen(&Clock::displayHomeHumidity);
   }
 
-  // Calendar events
-  addTimedDisplayAction(&Clock::displayCalendar);
+  addScreen(&Clock::displayCalendar);
 
   LOG_DEBUG("Display sequence built with " + String(displaySequenceLength) +
-            " items");
+            " data screens (clock shown between each)");
 }
 
 // Checks for minute change and switches to time display
@@ -142,63 +134,25 @@ void Clock::checkMinuteChange() {
   // Get current minute using TimeLib (more reliable)
   int currentMinute = minute();
 
-  // If minute changed and we're not showing time
   if (lastDisplayedMinute != -1 && currentMinute != lastDisplayedMinute) {
-    // Check if we're currently showing time
-    bool isCurrentlyShowingTime =
-        (displaySequence[currentDisplayIndex] == &Clock::displayTime);
-
-    if (!isCurrentlyShowingTime) {
-      // Find next time index and switch to it
-      int nextTimeIndex = findNextTimeIndex();
-      if (nextTimeIndex != -1) {
-        currentDisplayIndex = nextTimeIndex;
-        executeDisplayAction(); // Immediately show time
-        lastChangeTime =
-            millis(); // Reset timer so this display stays for full duration
-        LOG_VERBOSE("Minute changed, switched to time display");
-      }
-    } else {
-      // If already showing time, just update it
-      executeDisplayAction();
-      lastChangeTime = millis(); // Reset timer
+    if (!showingTime) {
+      // Jump to the clock slot for the current data screen. The rotation
+      // resumes from the same data screen afterwards.
+      showingTime = true;
     }
+    executeDisplayAction();     // Immediately show time
+    lastChangeTime = millis();  // Stay on it for the full interval
+    LOG_VERBOSE_F("Minute changed, switched to time display");
   }
 
-  // Update last displayed minute
   lastDisplayedMinute = currentMinute;
 }
 
 // Skip current display item and force immediate transition
 void Clock::skipCurrentDisplay() {
-  lastChangeTime = millis() - (Timing::CLOCK_INTERVAL_SEC * 1000UL); // Force timeExpired in next loop check
-  
-  // Advance the index so we also skip the structurally paired 'displayTime' 
-  // that follows this skipped item, preventing Time being shown twice in a row.
-  currentDisplayIndex++;
-  if (currentDisplayIndex >= displaySequenceLength) {
-    currentDisplayIndex = 0;
-  }
-}
-
-// Finds next time index in display sequence
-int Clock::findNextTimeIndex() {
-  // Search for time starting from current index
-  for (int i = currentDisplayIndex; i < displaySequenceLength; i++) {
-    if (displaySequence[i] == &Clock::displayTime) {
-      return i;
-    }
-  }
-
-  // If not found, search from beginning of sequence
-  for (int i = 0; i < currentDisplayIndex; i++) {
-    if (displaySequence[i] == &Clock::displayTime) {
-      return i;
-    }
-  }
-
-  // If not found at all, return first element (which is always time)
-  return 0;
+  // Force timeExpired on the next loop check. No index juggling needed: loop()
+  // owns the time/data alternation, so it advances correctly on its own.
+  lastChangeTime = millis() - (Timing::CLOCK_INTERVAL_SEC * 1000UL);
 }
 
 Dht22_manager &Clock::getDht22() { return dht22_manager; }

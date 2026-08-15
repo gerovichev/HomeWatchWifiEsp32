@@ -3,6 +3,7 @@
 #include "clock.h"
 #include "logger.h"
 #include "constants.h"
+#include "device_state.h"
 
 WiFiClient espClient;
 PubSubClient client(espClient);
@@ -13,7 +14,8 @@ void reconnect() {
 
   while (!client.connected() && attemptCount < maxAttempts) {
     LOG_DEBUG("Attempting MQTT connection (attempt " + String(attemptCount + 1) + "/" + String(maxAttempts) + ")...");
-    if (client.connect(hostname_m.c_str(), mqtt_user, mqtt_password)) {
+    if (client.connect(DeviceState::getInstance().getHostname().c_str(),
+                       mqtt_user, mqtt_password)) {
       LOG_INFO("MQTT connected successfully");
       return;
     } else {
@@ -44,9 +46,10 @@ void setup_mqtt() {
 }
 
 void publish_temperature() {
-  // Without a sensor homeTemp is still at its 0.0 initialiser, which is a
-  // plausible-looking reading - don't publish it as though it were measured.
-  if (!IS_DHT_CONNECTED) {
+  // Without a sensor there is no reading to publish - getHomeTemp() returns
+  // NAN, and a board with no DHT should stay silent rather than emit a
+  // plausible-looking value.
+  if (!DeviceState::getInstance().isDhtConnected()) {
     LOG_DEBUG_F("No DHT sensor on this device, skipping temperature publish");
     return;
   }

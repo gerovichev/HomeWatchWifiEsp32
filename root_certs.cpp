@@ -5,7 +5,7 @@
 // (mingw64/etc/ssl/certs/ca-bundle.crt) to confirm subject/issuer/fingerprint.
 
 const char ROOT_CA_BUNDLE[] =
-// ISRG Root X1 (Let's Encrypt) - api.timezonedb.com, gerovich*.duckdns.org
+// ISRG Root X1 (Let's Encrypt) - api.timezonedb.com, duckdns.org
 "-----BEGIN CERTIFICATE-----\n"
 "MIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRGPgu2OCiwAwDQYJKoZIhvcNAQELBQAw\n"
 "TzELMAkGA1UEBhMCVVMxKTAnBgNVBAoTIEludGVybmV0IFNlY3VyaXR5IFJlc2Vh\n"

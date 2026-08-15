@@ -20,6 +20,9 @@ extern int offset;
 extern String city_name;
 
 void getTimezone();
+// Reads timeClient under dataMutex - prefer this over touching timeClient
+// directly from the display core.
+time_t currentEpoch();
 void printTimeToScreen();
 void printDateToScreen();
 void printDayToScreen();

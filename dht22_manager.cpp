@@ -1,61 +1,122 @@
 #include "dht22_manager.h"
 #include "logger.h"
 #include "error_handler.h"
+#include "data_lock.h"
+#include "device_state.h"
 
-Dht22_manager::Dht22_manager() : DHT_Unified(DHTPIN, DHTTYPE){}
+Dht22_manager::Dht22_manager() : dht(DHTPIN, DHTTYPE) {}
 
 // Initializes the DHT22 hardware only (no read) - safe to call from error
 // recovery without risking recursion back into a failing read.
 void Dht22_manager::initSensor() {
-    begin();
+    dht.begin();
     sensor_t sensor;
 
     // Print temperature sensor details
-    temperature().getSensor(&sensor);
+    dht.temperature().getSensor(&sensor);
     printSensorDetails(sensor, "Temperature");
 
     // Print humidity sensor details
-    humidity().getSensor(&sensor);
+    dht.humidity().getSensor(&sensor);
     printSensorDetails(sensor, "Humidity");
 }
 
-// Function to initialize the DHT22 sensor and set home temperature
+// Function to initialize the DHT22 sensor and take the first reading
 void Dht22_manager::dht22Start() {
-    if (IS_DHT_CONNECTED) {
+    if (DeviceState::getInstance().isDhtConnected()) {
         initSensor();
-        setHomeTemp();  // Read and set initial home temperature
+        refresh();
     }
 }
 
-// Function to read and set the home temperature
-void Dht22_manager::setHomeTemp() {
-    sensors_event_t event;
-    temperature().getEvent(&event);
-    if (isnan(event.temperature)) {
-        handleTemperatureError();
-    } else {
-        homeTemp = event.temperature;
-        sensorErrorCount = 0;
+// Blocking sensor read. Runs on the data-update task; the values land in the
+// cache under dataMutex so the display core can read them without blocking.
+void Dht22_manager::refresh() {
+    if (!DeviceState::getInstance().isDhtConnected()) {
+        return;
+    }
+
+    sensors_event_t tempEvent;
+    sensors_event_t humidityEvent;
+    dht.temperature().getEvent(&tempEvent);
+    dht.humidity().getEvent(&humidityEvent);
+
+    const bool tempOk = !isnan(tempEvent.temperature);
+    const bool humidityOk = !isnan(humidityEvent.relative_humidity);
+
+    if (!tempOk) {
+        handleSensorError(F("temperature"));
+    }
+    if (!humidityOk) {
+        handleSensorError(F("humidity"));
+    }
+    if (!tempOk && !humidityOk) {
+        return;
+    }
+
+    sensorErrorCount = 0;
+
+    {
+        DataLock lock;
+        if (tempOk) {
+            homeTemp = tempEvent.temperature;
+        }
+        if (humidityOk) {
+            homeHumidity = humidityEvent.relative_humidity +
+                           DeviceState::getInstance().getHumidityDelta();
+        }
+    }
+
+    if (tempOk) {
+        LOG_VERBOSEF("Temperature: %.2f *C", tempEvent.temperature);
+    }
+    if (humidityOk) {
+        LOG_VERBOSEF("Humidity: %.2f%%", humidityEvent.relative_humidity +
+                                             DeviceState::getInstance().getHumidityDelta());
     }
 }
 
-float Dht22_manager::getHomeTemp()
-{
-  return homeTemp;
+float Dht22_manager::getHomeTemp() const {
+    DataLock lock;
+    return homeTemp;
 }
 
 // Function to print home temperature to the display
 void Dht22_manager::printHomeTemp() {
-    readAndPrintTemperature();
+    float value;
+    {
+        DataLock lock;
+        value = homeTemp;
+    }
+
+    if (isnan(value)) {
+        LOG_DEBUG_F("No temperature reading available yet");
+        return;
+    }
+
+    drawString(String("T") + String(round(value), 0) + getGradValue() + "C");
 }
 
 // Function to print humidity to the display
 void Dht22_manager::printHumidity() {
-    readAndPrintHumidity();
+    float value;
+    {
+        DataLock lock;
+        value = homeHumidity;
+    }
+
+    if (isnan(value)) {
+        LOG_DEBUG_F("No humidity reading available yet");
+        return;
+    }
+
+    String tape = String(round(value), 0) + "%";
+    // "H100%" fills the panel; anything shorter gets a space so it lines up.
+    drawString(tape.length() == 4 ? String("H") + tape : String("H ") + tape);
 }
 
 // Function to print detailed sensor information
-void Dht22_manager::printSensorDetails(sensor_t sensor, const char* type) {
+void Dht22_manager::printSensorDetails(const sensor_t& sensor, const char* type) {
     LOG_DEBUG_F("------------------------------------");
     LOG_DEBUG(String(type));
 
@@ -71,55 +132,14 @@ void Dht22_manager::printSensorDetails(sensor_t sensor, const char* type) {
     LOG_DEBUG_F("------------------------------------");
 }
 
-// Function to read and print temperature to the display
-void Dht22_manager::readAndPrintTemperature() {
-    sensors_event_t event;
-    temperature().getEvent(&event);
-    if (isnan(event.temperature)) {
-        handleTemperatureError();
-    } else {
-        homeTemp = event.temperature;
-        sensorErrorCount = 0;
-        LOG_VERBOSE("Temperature: " + String(homeTemp, 2) + " *C");
-        String tape = String("T") + String(round(homeTemp), 0) + getGradValue() + "C";
-        drawString(tape);
-    }
-}
+// Shared failure path for both channels
+void Dht22_manager::handleSensorError(const __FlashStringHelper* what) {
+    LOG_ERROR("Error reading " + String(what) + " from DHT22");
 
-// Function to read and print humidity to the display
-void Dht22_manager::readAndPrintHumidity() {
-    sensors_event_t event;
-    humidity().getEvent(&event);
-    if (isnan(event.relative_humidity)) {
-        handleHumidityError();
-    } else {
-        homeHumidity = event.relative_humidity + humidity_delta;
-        sensorErrorCount = 0;
-        LOG_VERBOSE("Humidity: " + String(homeHumidity, 2) + "%");
-        String tape = String(round(homeHumidity), 0) + "%";
-        tape = tape.length() == 4 ? String("H") + tape : String("H ") + tape;
-        drawString(tape);
-    }
-}
-
-// Function to handle temperature reading errors
-void Dht22_manager::handleTemperatureError() {
-    LOG_ERROR_F("Error reading temperature!");
     if (ErrorHandler::shouldRetry(ErrorHandler::ERROR_SENSOR, sensorErrorCount, 2)) {
         sensorErrorCount++;
         initSensor();  // Reinit hardware only - does not re-read, so this cannot recurse
     } else {
-        LOG_WARNING_F("DHT22 temperature errors exceeded retry limit, giving up until next reading");
-    }
-}
-
-// Function to handle humidity reading errors
-void Dht22_manager::handleHumidityError() {
-    LOG_ERROR_F("Error reading humidity!");
-    if (ErrorHandler::shouldRetry(ErrorHandler::ERROR_SENSOR, sensorErrorCount, 2)) {
-        sensorErrorCount++;
-        initSensor();  // Reinit hardware only - does not re-read, so this cannot recurse
-    } else {
-        LOG_WARNING_F("DHT22 humidity errors exceeded retry limit, giving up until next reading");
+        LOG_WARNING_F("DHT22 errors exceeded retry limit, giving up until next cycle");
     }
 }

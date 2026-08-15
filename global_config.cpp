@@ -1,5 +1,6 @@
 #include "global_config.h"
 #include "constants.h"
+#include "text_utils.h"
 #include <WiFi.h>
 #include <esp_mac.h>
 
@@ -8,7 +9,27 @@ String lang_weather;
 time_t sunrise;
 time_t sunset;
 
-String version_prg = "260710";
+namespace {
+// Derives the YYMMDD version string from the compiler's __DATE__ ("MMM DD YYYY")
+// so it can no longer drift from what was actually flashed. The format is
+// unchanged, so the OTA server's comparison semantics stay the same.
+String buildVersionStamp() {
+  static const char kMonths[] = "JanFebMarAprMayJunJulAugSepOctNovDec";
+
+  char monthName[4] = {__DATE__[0], __DATE__[1], __DATE__[2], '\0'};
+  const char *found = strstr(kMonths, monthName);
+  const int month = found ? ((found - kMonths) / 3) + 1 : 0;
+
+  const int day = atoi(__DATE__ + 4);
+  const int year = atoi(__DATE__ + 7) % 100;
+
+  char stamp[7];
+  snprintf(stamp, sizeof(stamp), "%02d%02d%02d", year, month, day);
+  return String(stamp);
+}
+} // namespace
+
+String version_prg = buildVersionStamp();
 char grad = '\x60';
 
 float humidity_delta = 0.00;
@@ -101,7 +122,7 @@ void initPerDevice() {
 
 // Function to get a two-digit number as a string (with leading zero if necessary)
 String getNumberWithZerro(int dig) {
-    return (dig < 10) ? "0" + String(dig, DEC) : String(dig, DEC);
+    return TextUtils::twoDigits(dig);
 }
 
 // Wrapper function for drawing text on the display

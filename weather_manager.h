@@ -3,6 +3,16 @@
 
 #include <Arduino.h>
 
+// Plain copy of the weather fields, handed out under dataMutex so the display
+// core can format and draw without holding the lock.
+struct WeatherSnapshot {
+    int temperature = 0;
+    int feelsLike = 0;   // OpenWeatherMap "feels_like", not a daily maximum
+    int pressure = 0;    // mmHg
+    int humidity = 0;
+    char description[96] = {0};  // Fixed buffer: no heap allocation under lock
+};
+
 class WeatherManager {
 public:
     // Constructor
@@ -17,12 +27,11 @@ public:
     void printDescriptionWeatherToScreen() const; // Prints weather description
 
 private:
+    // Copies the current readings under dataMutex.
+    WeatherSnapshot snapshot() const;
+
     // Member variables to store weather data
-    int temperature;
-    int feelsLikeTemp;  // OpenWeatherMap "feels_like", not a daily maximum
-    int pressure;
-    int main_ext_humidity;
-    String description_weather;
+    WeatherSnapshot data;
 };
 
 #endif // WEATHER_MANAGER_H
